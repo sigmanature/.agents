@@ -1,0 +1,3 @@
+interface:
+  display_name: "Pixel 6 Vendor_boot Magisk Root"
+  short_description: "Patch vendor_boot main fragment (vendor_boot:) with Magisk to get root on Pixel 6 Android 16 AOSP builds"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mermaid Safe Diagrammer"
+  short_description: "generate/fix mermaid so it renders first try (quoted labels + escaping)"
+  icon: "🧜‍♀️"

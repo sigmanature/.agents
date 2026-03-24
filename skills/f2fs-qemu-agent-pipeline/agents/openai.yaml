@@ -1,0 +1,3 @@
+interface:
+  display_name: "F2FS QEMU Agent Pipeline"
+  short_description: "Safe F2FS and QEMU workflow guardrails for learn_os style kernel workspaces"

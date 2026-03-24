@@ -1,0 +1,3 @@
+interface:
+  display_name: "Android ADB Workflows"
+  short_description: "adb scripts for monkey runs, package discovery, and root-aware log/artifact collection"
