@@ -1,0 +1,423 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Run a long-running Android THP 64KB anon fallback sampling experiment.
+
+This script is host-side: it uses `adb` to talk to the device.
+It can optionally:
+- batch install APKs (by calling apk_batch_install.py)
+- run monkey workload (by calling run_monkey_and_collect_logs.sh)
+- sample /sys/kernel/mm/transparent_hugepage/hugepages-64kB/stats/* periodically
+
+Outputs (under --out-dir):
+- raw_samples.csv
+- derived.csv
+- summary.md
+- monkey/ (if monkey enabled)
+- run_manifest.json
+
+Designed for stability: retries ADB sampling on transient failures.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import shlex
+import subprocess
+import sys
+import time
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+
+DEFAULT_STATS_DIR = "/sys/kernel/mm/transparent_hugepage/hugepages-64kB/stats"
+DEFAULT_COUNTERS = [
+    "anon_fault_alloc",
+    "anon_fault_fallback",
+    "anon_fault_fallback_charge",
+    "split",
+    "swpin",
+    "swpout",
+    "zswpout",
+]
+
+
+def _now_ts() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _run(cmd: List[str], timeout_s: int = 60, check: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, check=check)
+
+
+def adb_devices() -> List[str]:
+    cp = _run(["adb", "devices"], timeout_s=20, check=True)
+    serials: List[str] = []
+    for line in cp.stdout.splitlines():
+        line = line.strip()
+        if not line or line.startswith("List of devices"):
+            continue
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "device":
+            serials.append(parts[0])
+    return serials
+
+
+def resolve_serial(user_serial: Optional[str]) -> str:
+    if user_serial:
+        return user_serial
+    serials = adb_devices()
+    if len(serials) == 1:
+        return serials[0]
+    if not serials:
+        raise RuntimeError("No device found (adb devices shows none in 'device' state)")
+    raise RuntimeError("Multiple devices detected; pass --serial. Devices: " + ", ".join(serials))
+
+
+def adb_base(serial: str) -> List[str]:
+    return ["adb", "-s", serial]
+
+
+def adb_shell(serial: str, cmd: str, use_su: bool, timeout_s: int = 30) -> str:
+    base = adb_base(serial)
+    if use_su:
+        # Run via: su -c 'sh -c <cmd>' so redirection/pipes work.
+        wrapped = f"sh -c {shlex.quote(cmd)}"
+        cp = _run(base + ["shell", "su", "-c", wrapped], timeout_s=timeout_s)
+    else:
+        cp = _run(base + ["shell", "sh", "-c", cmd], timeout_s=timeout_s)
+
+    if cp.returncode != 0:
+        raise RuntimeError((cp.stderr or cp.stdout or "adb shell failed").strip())
+    return cp.stdout
+
+
+def ensure_out_dir(out_dir: Optional[str]) -> Path:
+    p = Path(out_dir) if out_dir else Path("output") / f"thp_fallback_{_now_ts()}"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def run_setup_cmds(serial: str, setup_cmds: List[str], use_su: bool, log_path: Path) -> None:
+    if not setup_cmds:
+        return
+
+    with log_path.open("w", encoding="utf-8") as f:
+        for i, cmd in enumerate(setup_cmds, start=1):
+            f.write(f"[{i}] {cmd}\n")
+            try:
+                out = adb_shell(serial, cmd, use_su=use_su, timeout_s=30)
+                if out.strip():
+                    f.write(out)
+                    if not out.endswith("\n"):
+                        f.write("\n")
+            except Exception as e:
+                f.write(f"ERROR: {e}\n")
+
+
+def maybe_install_apks(skill_dir: Path, apk_dir: Optional[str], serial: str, out_dir: Path) -> Optional[Path]:
+    if not apk_dir:
+        return None
+
+    apk_dir_path = Path(apk_dir)
+    if not apk_dir_path.exists():
+        raise FileNotFoundError(f"apk dir not found: {apk_dir}")
+
+    installer = skill_dir / "apk_batch_install.py"
+    install_out = out_dir / "apk_install"
+    install_out.mkdir(parents=True, exist_ok=True)
+
+    cmd = [sys.executable, str(installer), str(apk_dir_path), "--serial", serial, "--output-dir", str(install_out)]
+    cp = _run(cmd, timeout_s=60 * 60, check=False)
+    (install_out / "installer_stdout.txt").write_text(cp.stdout, encoding="utf-8")
+    (install_out / "installer_stderr.txt").write_text(cp.stderr, encoding="utf-8")
+    if cp.returncode not in (0, 1):
+        raise RuntimeError(f"apk install tool failed rc={cp.returncode}. See {install_out}")
+
+    return install_out
+
+
+def compute_monkey_events(duration_s: int, throttle_ms: int) -> int:
+    # Approx: 1 event per throttle interval.
+    est = int((duration_s * 1000) / max(1, throttle_ms))
+    return max(est, 10_000)
+
+
+def start_monkey(skill_dir: Path, serial: str, out_dir: Path, mode: str, pkgs: Optional[List[str]],
+                 throttle_ms: int, events: Optional[int], extra: str, clear_logcat: bool) -> Optional[subprocess.Popen]:
+    if mode == "none":
+        return None
+
+    monkey_script = skill_dir / "run_monkey_and_collect_logs.sh"
+    monkey_out = out_dir / "monkey"
+    monkey_out.mkdir(parents=True, exist_ok=True)
+
+    args = ["bash", str(monkey_script), "--serial", serial, "--out", str(monkey_out), "--throttle", str(throttle_ms)]
+
+    if clear_logcat:
+        args.append("--clear-logcat")
+
+    if mode == "global":
+        args.append("--global")
+    elif mode == "package":
+        if not pkgs:
+            raise ValueError("--monkey-package is required when --monkey=package")
+        for pkg in pkgs:
+            args += ["--package", pkg]
+    else:
+        raise ValueError("--monkey must be one of: none, global, package")
+
+    if events is not None:
+        args += ["--events", str(events)]
+
+    if extra:
+        args += ["--extra", extra]
+
+    # Run in background.
+    return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def stop_monkey_best_effort(serial: str) -> None:
+    # Try to stop monkey process on device if still running.
+    base = adb_base(serial)
+    _run(base + ["shell", "sh", "-c", "pkill -f com.android.commands.monkey || true"], timeout_s=10, check=False)
+
+
+@dataclass
+class Sample:
+    host_ts: int
+    device_ts: Optional[int]
+    values: Dict[str, Optional[int]]
+    error: str = ""
+
+
+def parse_kv_lines(text: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+def read_counters_once(serial: str, stats_dir: str, counters: List[str], use_su: bool) -> Sample:
+    host_ts = int(time.time())
+
+    # One adb call for ts + all counters.
+    parts = [
+        "ts=$(date +%s)",
+        "echo device_ts=$ts",
+    ]
+    for c in counters:
+        # Print empty if missing.
+        parts.append(f"v=$(cat {stats_dir}/{c} 2>/dev/null || echo '')")
+        parts.append(f"echo {c}=$v")
+
+    script = "; ".join(parts)
+
+    try:
+        out = adb_shell(serial, script, use_su=use_su, timeout_s=20)
+        kv = parse_kv_lines(out)
+        dev_ts = int(kv.get("device_ts")) if kv.get("device_ts", "").isdigit() else None
+        values: Dict[str, Optional[int]] = {}
+        for c in counters:
+            s = kv.get(c, "")
+            values[c] = int(s) if s.isdigit() else None
+        return Sample(host_ts=host_ts, device_ts=dev_ts, values=values, error="")
+    except Exception as e:
+        return Sample(host_ts=host_ts, device_ts=None, values={c: None for c in counters}, error=str(e))
+
+
+def sample_loop(serial: str, stats_dir: str, counters: List[str], use_su: bool,
+                interval_s: int, duration_s: int, out_csv: Path,
+                retries: int, retry_sleep_s: int, monkey_proc: Optional[subprocess.Popen]) -> Tuple[int, int]:
+    """Returns (num_samples, num_errors)."""
+
+    fieldnames = ["host_ts", "device_ts", "error"] + counters
+
+    t0 = time.time()
+    t_end = t0 + duration_s
+    next_t = t0
+
+    num = 0
+    num_err = 0
+
+    with out_csv.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+
+        while True:
+            now = time.time()
+            if now >= t_end:
+                break
+
+            # align schedule
+            if now < next_t:
+                time.sleep(min(next_t - now, 1.0))
+                continue
+
+            s: Optional[Sample] = None
+            for attempt in range(retries + 1):
+                s = read_counters_once(serial, stats_dir, counters, use_su=use_su)
+                if not s.error:
+                    break
+                time.sleep(retry_sleep_s)
+
+            assert s is not None
+            row = {
+                "host_ts": s.host_ts,
+                "device_ts": s.device_ts if s.device_ts is not None else "",
+                "error": s.error,
+            }
+            for c in counters:
+                v = s.values.get(c)
+                row[c] = v if v is not None else ""
+            w.writerow(row)
+            f.flush()
+
+            num += 1
+            if s.error:
+                num_err += 1
+
+            # If monkey already finished, we still keep sampling until duration ends.
+            _ = monkey_proc.poll() if monkey_proc else None
+
+            next_t += interval_s
+
+    return num, num_err
+
+
+def run_derive(skill_dir: Path, out_dir: Path) -> None:
+    derive = skill_dir / "derive_metrics.py"
+    cmd = [sys.executable, str(derive), str(out_dir / "raw_samples.csv"), "--out-dir", str(out_dir)]
+    cp = _run(cmd, timeout_s=120, check=False)
+    (out_dir / "derive_stdout.txt").write_text(cp.stdout, encoding="utf-8")
+    (out_dir / "derive_stderr.txt").write_text(cp.stderr, encoding="utf-8")
+    if cp.returncode != 0:
+        raise RuntimeError(f"derive_metrics failed rc={cp.returncode}. See derive_stderr.txt")
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    p = argparse.ArgumentParser(description="Android THP 64KB anon fallback sampler (adb host-side)")
+    p.add_argument("--serial", default=None, help="Target device serial. Auto-detect if exactly one device.")
+    p.add_argument("--duration-s", type=int, default=6 * 3600, help="Total sampling duration seconds (default: 6h)")
+    p.add_argument("--interval-s", type=int, default=60, help="Sampling interval seconds (default: 60)")
+    p.add_argument("--stats-dir", default=DEFAULT_STATS_DIR, help="Stats dir (default: hugepages-64kB stats)")
+    p.add_argument("--counters", default=",".join(DEFAULT_COUNTERS), help="Comma-separated counter files to sample")
+    p.add_argument("--use-su", action="store_true", help="Use su -c when running setup and reading stats")
+    p.add_argument("--setup-shell", action="append", default=[], help="Device-side shell cmd to run before sampling (repeatable)")
+
+    p.add_argument("--apk-dir", default=None, help="Directory of *.apk to install before running")
+
+    p.add_argument("--monkey", default="none", choices=["none", "global", "package"], help="Monkey mode")
+    p.add_argument("--monkey-package", action="append", default=None, dest="monkey_package",
+                   help="Package name for monkey package mode (repeatable for multiple packages)")
+    p.add_argument("--monkey-throttle-ms", type=int, default=75, help="Monkey throttle ms")
+    p.add_argument("--monkey-events", type=int, default=None, help="Monkey events; default computed from duration/throttle")
+    p.add_argument("--monkey-extra", default="", help="Extra monkey flags appended verbatim")
+    p.add_argument("--clear-logcat", action="store_true", help="Clear logcat buffers before monkey (destructive)")
+
+    p.add_argument("--out-dir", default=None, help="Output directory")
+    p.add_argument("--sample-retries", type=int, default=2, help="Retries per sample on adb failure")
+    p.add_argument("--retry-sleep-s", type=int, default=2, help="Sleep between sample retries")
+
+    args = p.parse_args(argv)
+
+    # Preflight: adb exists
+    try:
+        _ = _run(["adb", "version"], timeout_s=10, check=True)
+    except Exception:
+        print("ERROR: adb not found or not working in PATH", file=sys.stderr)
+        return 2
+
+    serial = resolve_serial(args.serial)
+
+    out_dir = ensure_out_dir(args.out_dir)
+    (out_dir / "host_start_ts.txt").write_text(str(int(time.time())) + "\n", encoding="utf-8")
+
+    skill_dir = Path(__file__).resolve().parent
+
+    # Save manifest early.
+    manifest = {
+        "serial": serial,
+        "start_host_ts": int(time.time()),
+        "args": vars(args),
+    }
+    (out_dir / "run_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    # Optional: install apks
+    if args.apk_dir:
+        maybe_install_apks(skill_dir, args.apk_dir, serial=serial, out_dir=out_dir)
+
+    # Setup commands
+    run_setup_cmds(serial, args.setup_shell, use_su=args.use_su, log_path=out_dir / "setup_log.txt")
+
+    counters = [c.strip() for c in args.counters.split(",") if c.strip()]
+
+    # Start monkey
+    monkey_events = args.monkey_events
+    if args.monkey != "none" and monkey_events is None:
+        monkey_events = compute_monkey_events(args.duration_s, args.monkey_throttle_ms)
+
+    monkey_proc = start_monkey(
+        skill_dir=skill_dir,
+        serial=serial,
+        out_dir=out_dir,
+        mode=args.monkey,
+        pkgs=args.monkey_package,
+        throttle_ms=args.monkey_throttle_ms,
+        events=monkey_events,
+        extra=args.monkey_extra,
+        clear_logcat=args.clear_logcat,
+    )
+
+    # Sampling loop
+    raw_csv = out_dir / "raw_samples.csv"
+    n, nerr = sample_loop(
+        serial=serial,
+        stats_dir=args.stats_dir,
+        counters=counters,
+        use_su=args.use_su,
+        interval_s=max(1, args.interval_s),
+        duration_s=max(1, args.duration_s),
+        out_csv=raw_csv,
+        retries=max(0, args.sample_retries),
+        retry_sleep_s=max(0, args.retry_sleep_s),
+        monkey_proc=monkey_proc,
+    )
+
+    # Wait monkey to finish (best effort)
+    if monkey_proc:
+        try:
+            stdout, stderr = monkey_proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            monkey_proc.kill()
+            stdout, stderr = monkey_proc.communicate(timeout=10)
+        (out_dir / "monkey_runner_stdout.txt").write_text(stdout or "", encoding="utf-8")
+        (out_dir / "monkey_runner_stderr.txt").write_text(stderr or "", encoding="utf-8")
+
+        # If still running on device, stop it.
+        stop_monkey_best_effort(serial)
+
+    # Derive
+    run_derive(skill_dir, out_dir)
+
+    # Final manifest update
+    manifest["end_host_ts"] = int(time.time())
+    manifest["samples"] = n
+    manifest["sample_errors"] = nerr
+    (out_dir / "run_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    print(f"Done. out_dir: {out_dir}")
+    print(f"Samples: {n} | sample_errors: {nerr}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
