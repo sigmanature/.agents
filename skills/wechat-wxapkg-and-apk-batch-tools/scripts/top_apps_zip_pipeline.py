@@ -5,15 +5,15 @@
 This script intentionally does NOT import launcher_ui/widget_automation_test.py.
 It carries over the essential logic:
 - top-app to ZIP URL mapping
-- range/cumulative ZIP selection
+- arbitrary range ZIP selection by two-level index (chunk + offset)
 - download ZIP(s)
-- unzip locally
+- unzip selected APK subset locally
 - install extracted APKs to one or two devices (parallel by device)
 
 Outputs under --output-dir:
 - downloads/                (zip cache + extracted dirs)
 - install_log.jsonl         (per-device per-apk install records)
-- all_packages.txt          (all apk-derived package names from extracted apks)
+- all_packages.txt          (all apk-derived package names from selected rank range)
 - installed_packages.txt    (package names installed successfully on all devices)
 - failed_apks.txt           (apk filenames that failed on any device)
 """
@@ -32,7 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 from urllib.request import urlopen
 
@@ -68,6 +68,40 @@ RANGE_TO_KEY = {
 }
 
 
+@dataclass(frozen=True)
+class ZipChunk:
+    start: int
+    end: int
+    key: int
+    url: str
+
+
+@dataclass
+class InstallRecord:
+    serial: str
+    apk: str
+    package_name: str
+    ok: bool
+    returncode: int
+    stdout: str
+    stderr: str
+    elapsed_ms: int
+
+
+def build_chunks() -> List[ZipChunk]:
+    chunks: List[ZipChunk] = []
+    for (start, end), key in sorted(RANGE_TO_KEY.items(), key=lambda x: x[0][0]):
+        url = ZIP_MAPPING.get(key)
+        if not url:
+            raise ValueError(f"missing zip url for key={key}")
+        chunks.append(ZipChunk(start=start, end=end, key=key, url=url))
+    return chunks
+
+
+ALL_CHUNKS = build_chunks()
+MAX_RANK = max(c.end for c in ALL_CHUNKS)
+
+
 def now_ts() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -76,48 +110,36 @@ def default_output_dir() -> Path:
     return Path("output") / f"top_apps_pipeline_{now_ts()}"
 
 
-def get_zip_urls(top_app: str) -> List[str]:
+def parse_top_app_spec(top_app: str) -> Tuple[int, int]:
     top_app = str(top_app).strip()
-    urls: List[str] = []
-
     if "-" in top_app:
         try:
             start, end = map(int, top_app.split("-", 1))
         except ValueError as exc:
-            raise ValueError(f"区间格式错误: {top_app}，正确格式如 51-100") from exc
+            raise ValueError(f"区间格式错误: {top_app}，正确格式如 20-70") from exc
+    else:
+        try:
+            end = int(top_app)
+        except ValueError as exc:
+            raise ValueError(f"top-app 参数错误: {top_app}，应为整数或区间") from exc
+        start = 1
 
-        for (s, e), key in RANGE_TO_KEY.items():
-            if start >= s and end <= e:
-                return [ZIP_MAPPING[key]]
-        raise ValueError(f"无效区间: {top_app}")
+    if start < 1 or end < 1 or start > end:
+        raise ValueError(f"无效区间: {start}-{end}")
+    if end > MAX_RANK:
+        raise ValueError(f"最大支持到 top{MAX_RANK}，收到: {start}-{end}")
+    return start, end
 
-    n = int(top_app)
-    if n >= 50:
-        urls.append(ZIP_MAPPING[50])
-    if n >= 100:
-        urls.append(ZIP_MAPPING[100])
-    if n >= 200:
-        urls.append(ZIP_MAPPING[200])
-    if n >= 300:
-        urls.append(ZIP_MAPPING[300])
-    if n >= 400:
-        urls.append(ZIP_MAPPING[400])
-    if n >= 500:
-        urls.append(ZIP_MAPPING[500])
-    if n >= 700:
-        urls.append(ZIP_MAPPING[700])
-    if n >= 900:
-        urls.append(ZIP_MAPPING[900])
-    if n >= 1000:
-        urls.append(ZIP_MAPPING[1000])
-    if n >= 1200:
-        urls.append(ZIP_MAPPING[1200])
-    if n >= 1500:
-        urls.append(ZIP_MAPPING[1500])
-    if n >= 2000:
-        urls.append(ZIP_MAPPING[2000])
 
-    return urls
+def resolve_chunks_for_range(start: int, end: int) -> List[ZipChunk]:
+    chunks: List[ZipChunk] = []
+    for c in ALL_CHUNKS:
+        if end < c.start or start > c.end:
+            continue
+        chunks.append(c)
+    if not chunks:
+        raise ValueError(f"无法为区间 {start}-{end} 找到 ZIP chunk")
+    return chunks
 
 
 def adb_devices() -> List[str]:
@@ -162,59 +184,27 @@ def download_file(url: str, path: Path) -> None:
     tmp.replace(path)
 
 
-def download_zips(urls: List[str], download_dir: Path) -> List[Path]:
+def download_zips(chunks: List[ZipChunk], download_dir: Path) -> List[Tuple[ZipChunk, Path]]:
     download_dir.mkdir(parents=True, exist_ok=True)
-    out: List[Path] = []
-    for url in urls:
-        name = zip_name_from_url(url)
+    out: List[Tuple[ZipChunk, Path]] = []
+    for c in chunks:
+        name = zip_name_from_url(c.url)
         p = download_dir / name
         if p.exists() and p.stat().st_size > 0:
-            print(f"[cache] {p}")
+            size_mb = p.stat().st_size / (1024 * 1024)
+            print(f"[cache-hit][zip] {name} -> {p} ({size_mb:.2f} MiB)")
         else:
             print(f"[download] {name}")
-            download_file(url, p)
-        out.append(p)
+            download_file(c.url, p)
+            size_mb = p.stat().st_size / (1024 * 1024)
+            print(f"[download-done][zip] {name} ({size_mb:.2f} MiB)")
+        out.append((c, p))
     return out
-
-
-def unzip_all(zip_paths: List[Path], download_dir: Path, clean: str) -> List[Path]:
-    apk_dirs: List[Path] = []
-    for z in zip_paths:
-        base = z.name[:-4] if z.name.lower().endswith(".zip") else z.stem
-        d = download_dir / base
-        if d.exists() and any(d.glob("*.apk")):
-            print(f"[cache-unzip] {d}")
-        else:
-            d.mkdir(parents=True, exist_ok=True)
-            with zipfile.ZipFile(z, "r") as zf:
-                zf.extractall(d)
-            print(f"[unzip] {z} -> {d}")
-        apk_dirs.append(d)
-
-        if clean == "all":
-            try:
-                z.unlink()
-            except FileNotFoundError:
-                pass
-
-    return apk_dirs
 
 
 def infer_package_name(apk_path: Path) -> str:
     n = apk_path.name
     return n[:-4] if n.lower().endswith(".apk") else apk_path.stem
-
-
-@dataclass
-class InstallRecord:
-    serial: str
-    apk: str
-    package_name: str
-    ok: bool
-    returncode: int
-    stdout: str
-    stderr: str
-    elapsed_ms: int
 
 
 def install_one(serial: str, apk_path: Path, timeout_s: int) -> InstallRecord:
@@ -246,8 +236,8 @@ def install_one(serial: str, apk_path: Path, timeout_s: int) -> InstallRecord:
             package_name=pkg,
             ok=False,
             returncode=124,
-            stdout=((e.stdout.decode("utf-8", "ignore") if isinstance(e.stdout, bytes) else (e.stdout or ""))).strip(),
-            stderr=((e.stderr.decode("utf-8", "ignore") if isinstance(e.stderr, bytes) else (e.stderr or ""))).strip() or f"timeout after {timeout_s}s",
+            stdout=((e.stdout.decode("utf-8", "ignore") if isinstance(e.stdout, bytes) else (e.stdout or "")).strip()),
+            stderr=((e.stderr.decode("utf-8", "ignore") if isinstance(e.stderr, bytes) else (e.stderr or "")).strip()) or f"timeout after {timeout_s}s",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
 
@@ -264,13 +254,77 @@ def install_on_device(serial: str, apks: List[Path], timeout_s: int) -> List[Ins
     return recs
 
 
+def select_and_extract_apks(
+    chunk_zips: List[Tuple[ZipChunk, Path]],
+    download_dir: Path,
+    range_start: int,
+    range_end: int,
+    clean: str,
+) -> Tuple[List[Path], List[Path]]:
+    ranked_apks: List[Tuple[int, Path]] = []
+    extracted_dirs: List[Path] = []
+
+    for chunk, zpath in chunk_zips:
+        base = zpath.name[:-4] if zpath.name.lower().endswith(".zip") else zpath.stem
+        extract_root = download_dir / base
+        extract_root.mkdir(parents=True, exist_ok=True)
+        extracted_dirs.append(extract_root)
+
+        extracted_count = 0
+        cache_hit_count = 0
+
+        with zipfile.ZipFile(zpath, "r") as zf:
+            members = [m for m in zf.namelist() if m.lower().endswith(".apk") and not m.endswith("/")]
+            if not members:
+                print(f"[warn] no apk in {zpath.name}")
+                continue
+
+            local_start = max(range_start, chunk.start) - chunk.start
+            local_end = min(range_end, chunk.end) - chunk.start
+            if local_start >= len(members):
+                print(f"[warn] {zpath.name} size={len(members)} but need offset {local_start}")
+                continue
+            local_end = min(local_end, len(members) - 1)
+
+            print(
+                f"[select] {zpath.name} chunk={chunk.start}-{chunk.end} "
+                f"offset={local_start}-{local_end}"
+            )
+
+            for i in range(local_start, local_end + 1):
+                member = members[i]
+                rank = chunk.start + i
+                out_path = extract_root / member
+                if out_path.exists():
+                    cache_hit_count += 1
+                    print(f"[cache-hit][apk] rank={rank} {out_path}")
+                else:
+                    zf.extract(member, path=extract_root)
+                    extracted_count += 1
+                ranked_apks.append((rank, out_path))
+
+        print(
+            f"[chunk-summary] {zpath.name} selected={local_end - local_start + 1} "
+            f"cache-hit={cache_hit_count} extracted={extracted_count}"
+        )
+
+        if clean == "all":
+            try:
+                zpath.unlink()
+            except FileNotFoundError:
+                pass
+
+    ranked_apks.sort(key=lambda x: x[0])
+    return [p for _, p in ranked_apks], extracted_dirs
+
+
 def write_lines(path: Path, lines: List[str]) -> None:
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description="Top apps pipeline: download -> unzip -> adb install")
-    p.add_argument("--top-app", type=str, default="100", help="50/100/200... or range like 51-100")
+    p.add_argument("--top-app", type=str, default="100", help="100 or range like 20-70")
     p.add_argument("--device1", type=str, default=None, help="Device serial 1")
     p.add_argument("--device2", type=str, default=None, help="Device serial 2")
     p.add_argument("--output-dir", type=str, default=None, help="Output directory")
@@ -279,11 +333,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     args = p.parse_args(argv)
 
-    serials = resolve_serials(args.device1, args.device2)
-    urls = get_zip_urls(args.top_app)
-    if not urls:
-        print("No ZIP URLs resolved", file=sys.stderr)
+    try:
+        range_start, range_end = parse_top_app_spec(args.top_app)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
         return 2
+
+    serials = resolve_serials(args.device1, args.device2)
+    chunks = resolve_chunks_for_range(range_start, range_end)
 
     out_dir = Path(args.output_dir) if args.output_dir else default_output_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -291,33 +348,32 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print(f"Output dir: {out_dir}")
     print(f"Devices: {', '.join(serials)}")
-    print(f"ZIP count: {len(urls)}")
+    print(f"Top range: {range_start}-{range_end} ({range_end - range_start + 1} apps)")
+    print("ZIP chunks: " + ", ".join(f"{c.start}-{c.end}" for c in chunks))
 
-    zip_paths = download_zips(urls, download_dir)
-    apk_dirs = unzip_all(zip_paths, download_dir, args.clean)
-
-    apks: List[Path] = []
-    for d in apk_dirs:
-        apks.extend(sorted([p for p in d.rglob("*.apk") if p.is_file()]))
+    chunk_zips = download_zips(chunks, download_dir)
+    apks, extracted_dirs = select_and_extract_apks(
+        chunk_zips=chunk_zips,
+        download_dir=download_dir,
+        range_start=range_start,
+        range_end=range_end,
+        clean=args.clean,
+    )
 
     if not apks:
-        print("No APKs found after unzip", file=sys.stderr)
+        print("No APKs selected after unzip", file=sys.stderr)
         return 3
 
     all_pkgs = [infer_package_name(apk) for apk in apks]
     write_lines(out_dir / "all_packages.txt", all_pkgs)
 
-    # Parallel by device
     all_records: List[InstallRecord] = []
     with ThreadPoolExecutor(max_workers=max(1, len(serials))) as ex:
         futs = [ex.submit(install_on_device, s, apks, args.timeout) for s in serials]
         for fut in futs:
             all_records.extend(fut.result())
 
-    by_apk: Dict[str, Dict[str, bool]] = {}
-    for apk in apks:
-        by_apk[apk.name] = {s: False for s in serials}
-
+    by_apk: Dict[str, Dict[str, bool]] = {apk.name: {s: False for s in serials} for apk in apks}
     for r in all_records:
         by_apk.setdefault(r.apk, {})[r.serial] = r.ok
 
@@ -339,7 +395,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     write_lines(out_dir / "failed_apks.txt", failed_apks)
 
     if args.clean in ("all", "folder"):
-        for d in apk_dirs:
+        for d in extracted_dirs:
             shutil.rmtree(d, ignore_errors=True)
 
     print(f"APKs total: {len(apks)}")

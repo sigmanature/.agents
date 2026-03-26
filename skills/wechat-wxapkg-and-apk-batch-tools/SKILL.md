@@ -2,7 +2,7 @@
 name: wechat-wxapkg-and-apk-batch-tools
 description: >
   Use this skill whenever the user asks to 批量下载微信小程序包(wxapkg) from a URL list (often with Cookie/Token headers)
-  OR asks to 批量安装一批 APK 到一台或多台 Android 设备 (adb install)
+  OR asks to 批量安装一批 APK 到一台或多台 Android 设备 (adb install-multi-package / adb install)
   OR asks to 下载Top应用压缩包/解压/批量安装（top50/top100/top200/top-app 区间等）。
   This skill provides repeatable workflows and repo-local CLI tools that generate manifests/logs for auditing and retry.
 ---
@@ -13,7 +13,7 @@ This skill wraps 3 repeatable workflows via repo-local CLIs:
 1) **Batch download wxapkg** (WeChat mini-program packages) from a `urls.txt` list, optionally sending auth headers from `headers.json`.
    - Tool: [`wxapkg_batch_download.py`](tools/wxapkg_batch_download.py:1)
 
-2) **Batch install APKs** from a directory to one or more Android devices.
+2) **Batch install APKs** from a directory to one or more Android devices (default fast path: `adb install-multi-package -r`, failure fallback: `adb install -r`).
    - Tool: [`apk_batch_install.py`](tools/apk_batch_install.py:1)
 
 3) **Top apps pipeline**: download ZIP(s) → unzip locally → install all contained APKs to connected device(s).
@@ -25,7 +25,7 @@ This skill wraps 3 repeatable workflows via repo-local CLIs:
 ## Preconditions / assumptions
 - For wxapkg download: URLs are directly downloadable; if auth is needed, user can provide `headers.json` (Cookie/Token/etc.).
 - For APK install: `adb` must be available in PATH and devices must be in `device` state (`adb devices`).
-- For Top apps pipeline: at least one device must be connected and usable; the pipeline installs APKs.
+- For Top apps pipeline: at least one device must be connected and usable; the pipeline installs selected rank-range APKs and supports arbitrary ranges.
 
 ## Quick start (recommended usage order)
 Pick **exactly one** of these entry workflows depending on what you have:
@@ -125,11 +125,11 @@ In output dir:
 ## Workflow C — Download Top apps ZIP(s) → unzip → install
 Use this when the user asks for:
 - “下载 top50/top100/top200/top500 应用压缩包并安装”
-- “top-app 51-100 / 101-200 区间下载解压安装”
+- “top-app 1-20 / 20-70 / 85-133 任意区间下载解压安装”
 
 ### 1) Ask for inputs
 You need:
-- `--top-app` value (e.g. `200` or `51-100`)
+- `--top-app` value (e.g. `200`, `51-100`, `20-70`)
 - Optional device serial(s): `--device1`, `--device2` (if omitted, the underlying code may auto-detect depending on environment)
 - Optional `--output-dir`
 - Optional `--clean` (default `folder`)
@@ -145,7 +145,7 @@ python3 tools/top_apps_zip_pipeline.py --top-app 200
 
 ```bash
 python3 tools/top_apps_zip_pipeline.py \
-  --top-app 51-100 \
+  --top-app 20-70 \
   --device1 ABC123 \
   --output-dir ./output/top_51_100 \
   --clean folder
@@ -153,7 +153,14 @@ python3 tools/top_apps_zip_pipeline.py \
 
 ### 3) What it produces
 - Output dir contains `downloads/` with cached ZIP(s) and extracted APK(s)
-- Installs all extracted APKs via `adb install -r`
+- Installs selected APKs via `adb install-multi-package -r` (auto fallback to `adb install -r` when needed)
+
+### 5) 区间算法说明（二级索引）
+- 一级索引：按 ZIP chunk 的 rank 区间定位（如 `1-50`, `51-100`, `101-200`）
+- 二级索引：在 chunk 内按 offset 截取，例如 `20-70` 会取：
+  - chunk `1-50` 的 offset `19-49`
+  - chunk `51-100` 的 offset `0-19`
+- 脚本只会安装请求区间的 APK，不再强制整包 50 个一起装
 
 ### 4) Troubleshooting
 - If URL download fails: check the hardcoded mapping in [`WidgetAutomationTest._get_zip_urls()`](launcher_ui/widget_automation_test.py:130)

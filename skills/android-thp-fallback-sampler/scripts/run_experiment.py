@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Run a long-running Android THP 64KB anon fallback sampling experiment.
+"""Run a long-running Android THP 64KB/16KB anon fallback sampling experiment.
 
 This script is host-side: it uses `adb` to talk to the device.
 It can optionally:
 - batch install APKs (by calling apk_batch_install.py)
 - run monkey workload (by calling run_monkey_and_collect_logs.sh)
-- sample /sys/kernel/mm/transparent_hugepage/hugepages-64kB/stats/* periodically
+- sample /sys/kernel/mm/transparent_hugepage/hugepages-*/stats/* periodically
 
 Outputs (under --out-dir):
 - raw_samples.csv
@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-DEFAULT_STATS_DIR = "/sys/kernel/mm/transparent_hugepage/hugepages-64kB/stats"
+DEFAULT_STATS_DIR = "/sys/kernel/mm/transparent_hugepage/hugepages-16kB/stats"
 DEFAULT_COUNTERS = [
     "anon_fault_alloc",
     "anon_fault_fallback",
@@ -94,6 +94,169 @@ def adb_shell(serial: str, cmd: str, use_su: bool, timeout_s: int = 30) -> str:
     if cp.returncode != 0:
         raise RuntimeError((cp.stderr or cp.stdout or "adb shell failed").strip())
     return cp.stdout
+
+
+def adb_shell_retry(serial: str, cmd: str, use_su: bool, timeout_s: int,
+                    retries: int, retry_sleep_s: int) -> str:
+    last_err: Optional[Exception] = None
+    for i in range(max(1, retries + 1)):
+        try:
+            return adb_shell(serial, cmd, use_su=use_su, timeout_s=timeout_s)
+        except Exception as e:
+            last_err = e
+            if i + 1 < max(1, retries + 1):
+                time.sleep(max(0, retry_sleep_s))
+    raise RuntimeError(str(last_err) if last_err else "adb_shell_retry failed")
+
+
+def is_device_awake(serial: str) -> Tuple[bool, str]:
+    try:
+        out = adb_shell(serial, "dumpsys power", use_su=False, timeout_s=30)
+    except Exception as e:
+        return False, f"ERR:{e}"
+
+    wake_lines = [ln.strip() for ln in out.splitlines() if "mWakefulness" in ln]
+    awake = any(("Awake" in ln) or ("mWakefulness=1" in ln) for ln in wake_lines)
+
+    if wake_lines:
+        summary = " | ".join(wake_lines[:4])
+    else:
+        summary = " | ".join(out.splitlines()[:3]).strip()
+    return awake, summary
+
+
+def prepare_device_for_monkey(serial: str, out_dir: Path, retries: int, retry_sleep_s: int) -> None:
+    """Best-effort device prep for stable monkey runs.
+
+    Ensures wake/unlock attempts and requests stay-awake behavior.
+    Raises RuntimeError if the device is not awake after retries.
+    """
+    log_path = out_dir / "device_prepare_log.txt"
+    cmds = [
+        "cmd input keyboard keyevent 224 || true",
+        "cmd window dismiss-keyguard || true",
+        "cmd input keyboard keyevent 82 || true",
+        "cmd input touchscreen swipe 300 1400 300 400 200 || true",
+        "svc power stayon true || true",
+        "cmd settings put global stay_on_while_plugged_in 3 || true",
+        "cmd settings put system screen_off_timeout 1800000 || true",
+    ]
+
+    with log_path.open("a", encoding="utf-8") as f:
+        for attempt in range(1, max(1, retries) + 1):
+            f.write(f"\n[{attempt}] {datetime.now().isoformat()}\n")
+            for cmd in cmds:
+                f.write(f"$ {cmd}\n")
+                try:
+                    out = adb_shell_retry(
+                        serial,
+                        cmd,
+                        use_su=False,
+                        timeout_s=20,
+                        retries=1,
+                        retry_sleep_s=1,
+                    )
+                    if out.strip():
+                        f.write(out)
+                        if not out.endswith("\n"):
+                            f.write("\n")
+                except Exception as e:
+                    f.write(f"ERR: {e}\n")
+
+            awake, wake_out = is_device_awake(serial)
+            if wake_out:
+                f.write(f"wake_out={wake_out}\n")
+            f.write(f"awake={awake}\n")
+            f.flush()
+            if awake:
+                return
+            if attempt < max(1, retries):
+                time.sleep(max(0, retry_sleep_s))
+
+    raise RuntimeError(
+        f"device prepare failed: device did not reach awake state after {max(1, retries)} attempts"
+    )
+
+
+def infer_enabled_path_from_stats_dir(stats_dir: str) -> Optional[str]:
+    x = stats_dir.rstrip("/")
+    if not x.endswith("/stats"):
+        return None
+    return x[: -len("/stats")] + "/enabled"
+
+
+def ensure_thp_mode_for_stats(serial: str, stats_dir: str, use_su: bool, desired_mode: str,
+                              retries: int, retry_sleep_s: int, log_path: Path) -> Dict[str, str]:
+    """Ensure THP mode for the stats directory's sibling `enabled` file.
+
+    Returns a result dict suitable for run_manifest.json.
+    """
+    result: Dict[str, str] = {
+        "stats_dir": stats_dir,
+        "status": "skipped",
+        "enabled_path": "",
+        "before": "",
+        "after": "",
+        "desired": desired_mode,
+        "reason": "",
+    }
+
+    enabled_path = infer_enabled_path_from_stats_dir(stats_dir)
+    if not enabled_path:
+        result["reason"] = "stats_dir does not end with /stats"
+        return result
+
+    result["enabled_path"] = enabled_path
+
+    def _read_enabled() -> str:
+        out = adb_shell_retry(
+            serial,
+            f"cat {enabled_path}",
+            use_su=use_su,
+            timeout_s=20,
+            retries=max(0, retries),
+            retry_sleep_s=max(0, retry_sleep_s),
+        )
+        return out.strip()
+
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(f"[{datetime.now().isoformat()}] stats_dir={stats_dir} enabled_path={enabled_path}\n")
+        before = _read_enabled()
+        result["before"] = before
+        f.write(f"before: {before}\n")
+
+        desired = (desired_mode or "").strip().lower()
+        if not desired or desired == "none":
+            result["status"] = "checked"
+            result["after"] = before
+            result["reason"] = "desired mode is none"
+            f.write("desired mode is none; check-only\n")
+            return result
+
+        cmd = f"echo {shlex.quote(desired)} > {enabled_path}"
+        adb_shell_retry(
+            serial,
+            cmd,
+            use_su=use_su,
+            timeout_s=20,
+            retries=max(0, retries),
+            retry_sleep_s=max(0, retry_sleep_s),
+        )
+
+        after = _read_enabled()
+        result["after"] = after
+        f.write(f"after: {after}\n")
+
+        if f"[{desired}]" not in after and desired not in after.split():
+            result["status"] = "failed"
+            result["reason"] = "desired mode not active after write"
+            raise RuntimeError(
+                f"THP mode ensure failed for {enabled_path}: expected '{desired}' active, got '{after}'"
+            )
+
+        result["status"] = "ensured"
+        result["reason"] = "ok"
+        return result
 
 
 def ensure_out_dir(out_dir: Optional[str]) -> Path:
@@ -312,16 +475,38 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--counters", default=",".join(DEFAULT_COUNTERS), help="Comma-separated counter files to sample")
     p.add_argument("--use-su", action="store_true", help="Use su -c when running setup and reading stats")
     p.add_argument("--setup-shell", action="append", default=[], help="Device-side shell cmd to run before sampling (repeatable)")
+    p.add_argument("--thp-ensure-mode", default="always",
+                   help="Ensure this mode in <stats_dir_parent>/enabled before sampling (default: always; use 'none' to check-only)")
+    p.add_argument("--thp-ensure-retries", type=int, default=3,
+                   help="Retries for THP mode read/write checks")
+    p.add_argument("--thp-ensure-retry-s", type=int, default=2,
+                   help="Sleep seconds between THP mode ensure retries")
+    p.add_argument("--no-thp-ensure", action="store_true",
+                   help="Skip THP mode ensure/check workflow")
 
     p.add_argument("--apk-dir", default=None, help="Directory of *.apk to install before running")
 
     p.add_argument("--monkey", default="none", choices=["none", "global", "package"], help="Monkey mode")
     p.add_argument("--monkey-package", action="append", default=None, dest="monkey_package",
                    help="Package name for monkey package mode (repeatable for multiple packages)")
+    p.add_argument("--monkey-package-file", default=None,
+                   help="Path to file with package names (one per line, # comments allowed)")
     p.add_argument("--monkey-throttle-ms", type=int, default=75, help="Monkey throttle ms")
     p.add_argument("--monkey-events", type=int, default=None, help="Monkey events; default computed from duration/throttle")
     p.add_argument("--monkey-extra", default="", help="Extra monkey flags appended verbatim")
     p.add_argument("--clear-logcat", action="store_true", help="Clear logcat buffers before monkey (destructive)")
+    p.add_argument("--device-prepare", dest="device_prepare", action="store_true", default=True,
+                   help="Before monkey: wake/unlock device and set stay-awake (default: enabled)")
+    p.add_argument("--no-device-prepare", dest="device_prepare", action="store_false",
+                   help="Disable pre-monkey wake/unlock/stay-awake preparation")
+    p.add_argument("--device-prepare-retries", type=int, default=5,
+                   help="Retries for pre-monkey device prepare checks")
+    p.add_argument("--device-prepare-retry-s", type=int, default=3,
+                   help="Sleep seconds between pre-monkey prepare retries")
+    p.add_argument("--monkey-start-retries", type=int, default=2,
+                   help="Retries when monkey runner exits immediately after start")
+    p.add_argument("--monkey-start-retry-s", type=int, default=5,
+                   help="Sleep seconds between monkey start retries")
 
     p.add_argument("--out-dir", default=None, help="Output directory")
     p.add_argument("--sample-retries", type=int, default=2, help="Retries per sample on adb failure")
@@ -358,24 +543,98 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Setup commands
     run_setup_cmds(serial, args.setup_shell, use_su=args.use_su, log_path=out_dir / "setup_log.txt")
 
+    # THP mode ensure/check workflow (requested for stable mTHP runs).
+    if not args.no_thp_ensure:
+        thp_mode = ensure_thp_mode_for_stats(
+            serial=serial,
+            stats_dir=args.stats_dir,
+            use_su=args.use_su,
+            desired_mode=args.thp_ensure_mode,
+            retries=max(0, args.thp_ensure_retries),
+            retry_sleep_s=max(0, args.thp_ensure_retry_s),
+            log_path=out_dir / "thp_mode_log.txt",
+        )
+        manifest["thp_mode"] = thp_mode
+        (out_dir / "run_manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
     counters = [c.strip() for c in args.counters.split(",") if c.strip()]
+
+    # Merge monkey packages from CLI and optional package file.
+    monkey_pkgs: List[str] = list(args.monkey_package or [])
+    if args.monkey_package_file:
+        pkg_path = Path(args.monkey_package_file)
+        if not pkg_path.exists():
+            raise FileNotFoundError(f"monkey package file not found: {pkg_path}")
+        for line in pkg_path.read_text(encoding="utf-8").splitlines():
+            x = line.strip()
+            if not x or x.startswith("#"):
+                continue
+            monkey_pkgs.append(x)
+
+    # de-dup while preserving order
+    monkey_pkgs = list(dict.fromkeys(monkey_pkgs))
 
     # Start monkey
     monkey_events = args.monkey_events
     if args.monkey != "none" and monkey_events is None:
         monkey_events = compute_monkey_events(args.duration_s, args.monkey_throttle_ms)
 
-    monkey_proc = start_monkey(
-        skill_dir=skill_dir,
-        serial=serial,
-        out_dir=out_dir,
-        mode=args.monkey,
-        pkgs=args.monkey_package,
-        throttle_ms=args.monkey_throttle_ms,
-        events=monkey_events,
-        extra=args.monkey_extra,
-        clear_logcat=args.clear_logcat,
-    )
+    monkey_proc: Optional[subprocess.Popen] = None
+    if args.monkey != "none":
+        if args.device_prepare:
+            prepare_device_for_monkey(
+                serial=serial,
+                out_dir=out_dir,
+                retries=max(1, args.device_prepare_retries),
+                retry_sleep_s=max(0, args.device_prepare_retry_s),
+            )
+
+        start_attempts = max(1, args.monkey_start_retries)
+        last_start_err = ""
+        for attempt in range(1, start_attempts + 1):
+            monkey_proc = start_monkey(
+                skill_dir=skill_dir,
+                serial=serial,
+                out_dir=out_dir,
+                mode=args.monkey,
+                pkgs=monkey_pkgs,
+                throttle_ms=args.monkey_throttle_ms,
+                events=monkey_events,
+                extra=args.monkey_extra,
+                clear_logcat=args.clear_logcat,
+            )
+
+            # If it survives initial startup window, treat as started.
+            time.sleep(3)
+            rc = monkey_proc.poll() if monkey_proc else None
+            if rc is None:
+                break
+
+            # Early exit: collect diagnostics and retry after re-prepare.
+            try:
+                out, err = monkey_proc.communicate(timeout=5)
+            except Exception:
+                out, err = "", ""
+            (out_dir / f"monkey_start_attempt_{attempt}.stdout.txt").write_text(out or "", encoding="utf-8")
+            (out_dir / f"monkey_start_attempt_{attempt}.stderr.txt").write_text(err or "", encoding="utf-8")
+            last_start_err = f"attempt={attempt}, rc={rc}"
+
+            if args.device_prepare:
+                prepare_device_for_monkey(
+                    serial=serial,
+                    out_dir=out_dir,
+                    retries=max(1, args.device_prepare_retries),
+                    retry_sleep_s=max(0, args.device_prepare_retry_s),
+                )
+            if attempt < start_attempts:
+                time.sleep(max(0, args.monkey_start_retry_s))
+            else:
+                raise RuntimeError(f"monkey failed to stay alive after startup: {last_start_err}")
+    else:
+        monkey_proc = None
 
     # Sampling loop
     raw_csv = out_dir / "raw_samples.csv"

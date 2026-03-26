@@ -41,6 +41,8 @@ adb devices
 
 ### 1) 可选：批量安装 APK
 
+> 批量安装能力由 `wechat-wxapkg-and-apk-batch-tools` skill 统一维护（含 `adb install-multi-package` 加速与区间逻辑），本 skill 仅复用该能力。
+
 ```bash
 python3 scripts/apk_batch_install.py ./apks --output-dir ./output/apk_install_run_001
 ```
@@ -114,6 +116,6 @@ python3 scripts/run_experiment.py \
 - `scripts/run_experiment.py`：一键跑采样 +（可选）安装 APK +（可选）monkey
 - `scripts/derive_metrics.py`：把 raw CSV 变成 derived+summary
 - `scripts/run_monkey_and_collect_logs.sh`：来自 android-adb-workflows
-- `scripts/apk_batch_install.py`：来自 wechat-wxapkg-and-apk-batch-tools
+- `scripts/apk_batch_install.py`：来自 wechat-wxapkg-and-apk-batch-tools（批量安装逻辑请参阅该 skill 的 SKILL.md）
 - `scripts/adb_pkg.sh`, `scripts/adb_helpers.sh`
 - `references/adb_execution_reference.md`, `references/monkey_flags.md`

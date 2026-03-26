@@ -185,7 +185,7 @@ echo "monkey_exit_code: $MONKEY_RC" >> "$SUMMARY"
 # Post snapshots.
 "${ADB[@]}" shell dumpsys activity activities > "$OUT_DIR/dumpsys_activity_end.txt" || true
 if [[ "$GLOBAL_MODE" -eq 0 ]]; then
-  "${ADB[@]}" shell dumpsys meminfo "$PKG" > "$OUT_DIR/dumpsys_meminfo_end.txt" || true
+  "${ADB[@]}" shell dumpsys meminfo "${PKGS[0]}" > "$OUT_DIR/dumpsys_meminfo_end.txt" || true
 else
   "${ADB[@]}" shell dumpsys meminfo > "$OUT_DIR/dumpsys_meminfo_end.txt" || true
 fi

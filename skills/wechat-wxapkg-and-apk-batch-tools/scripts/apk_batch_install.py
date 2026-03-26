@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -53,7 +52,6 @@ def adb_devices() -> List[str]:
         line = line.strip()
         if not line or line.startswith("List of devices"):
             continue
-        # Format: SERIAL\tdevice (or offline/unauthorized)
         parts = line.split()
         if len(parts) >= 2 and parts[1] == "device":
             serials.append(parts[0])
@@ -64,12 +62,10 @@ def list_apks(apk_dir: Path) -> List[Path]:
     if not apk_dir.exists() or not apk_dir.is_dir():
         raise FileNotFoundError(f"apk_dir not found or not a directory: {apk_dir}")
 
-    apks = sorted([p for p in apk_dir.iterdir() if p.is_file() and p.suffix.lower() == ".apk"])
-    return apks
+    return sorted([p for p in apk_dir.iterdir() if p.is_file() and p.suffix.lower() == ".apk"])
 
 
 def infer_package_name(apk_path: Path) -> str:
-    # Same approach as test/install_packages.sh
     return apk_path.name[: -len(".apk")] if apk_path.name.lower().endswith(".apk") else apk_path.stem
 
 
@@ -164,8 +160,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     failed_path = output_dir / "failed_apks.txt"
 
     records: List[InstallRecord] = []
-
-    # Track per-apk per-device success
     by_apk: Dict[str, Dict[str, bool]] = {}
 
     for apk in apks:
