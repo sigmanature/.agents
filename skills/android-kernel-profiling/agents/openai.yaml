@@ -1,0 +1,3 @@
+interface:
+  display_name: "Android Kernel Profiling"
+  short_description: "Guide simpleperf, perfetto, vmlinux, and kernel symbolization on Android"
