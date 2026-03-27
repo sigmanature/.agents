@@ -160,14 +160,15 @@ Recommended order:
 When asked to validate, test, or sanity-check a kernel-side change:
 Loop:
     1. Identify changed `.c` files relevant to the current work using `git diff` or `git status`.
-    2. For each changed `.c` file, run the single-file or object-level build helper from `.vars.sh` if available, such as a `kobj`-style helper.
-    3. Only after object-level checks succeed, run the full kernel image build command.
-    4. Capture build logs to files.
+    2. For each changed `.c` file, run the single-file or object-level build helper from `.vars.sh` which
+    is a function called `kobj`
+    3. Only after object-level checks succeed, run `bash $SCRIPT/make_upstream.sh` the full kernel image build command.
+    4. `bash $SCRIPT/make_upstream.sh` already capture build logs in a file you can inspect.s
     5. Summarize failures with the exact failing file, target, or phase.
     6. Do not claim success unless the relevant command exited successfully.
     7. Fix small syntax errors that the log reports. Especially be careful when deal with macro bug report.
 They can recursive flatten a lot of logs, but many cases the errors of use macro are just small errors.Don't be
-confused by the vase error massege.Thinking and reasoning the root case。
+confused by the vase error massege.Thinking and reasoning the root case.
 Until: no more errors are reported.
 
 When reporting build results, always include:
