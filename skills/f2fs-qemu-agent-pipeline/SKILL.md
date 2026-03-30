@@ -257,3 +257,30 @@ Before saying the task is done, verify the relevant facts actually happened:
 - “这个 F2FS 改动不要只看代码，帮我进 qemu 做一个可复现验证。”
 - “给我一个明确结论：到底是没启动、没连上 ssh，还是编译失败，日志在哪。”
 
+
+## Fscrypt preflight for rw_matrix.sh (lessons learned)
+
+When running `rw_matrix.sh` (or similar tests that assume an encrypted target dir):
+
+1. Do not assume `ENC_DIR` is encrypted just because it exists.
+2. Always verify both:
+   - `fscrypt status <ENC_DIR>` reports `is encrypted with fscrypt`, and
+   - `lsattr -d <ENC_DIR>` contains `E` flag.
+3. If filesystem has policy/protector but `ENC_DIR` is not encrypted, rebuild the directory:
+   - backup/move old plain directory,
+   - recreate empty directory,
+   - run `fscrypt encrypt <ENC_DIR> --policy=<mount>:<policy_id> --unlock-with=<mount>:<protector_id> --key=<raw_key_file> --quiet`,
+   - re-check `fscrypt status` and `lsattr`.
+4. Confirm newly created files under `ENC_DIR` also show encryption (`lsattr <file>` has `E` or `fscrypt status <file>` shows encrypted).
+5. For long runs via QGA, redirect script output to a guest log file and tail it separately; QGA command timeout does not imply script failure.
+6. If the run stalls or fails, immediately inspect `guest_console.log` for `Oops`, `BUG`, `Call trace`, `panic`, and include the first failing stack in report.
+
+Recommended minimal preflight command block in guest:
+
+```bash
+fscrypt status /mnt/f2fs
+fscrypt status /mnt/f2fs/enc_test
+lsattr -d /mnt/f2fs/enc_test
+```
+
+If `enc_test` is not encrypted, repair before test execution.
