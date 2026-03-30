@@ -50,6 +50,11 @@ When starting the VM:
 - If the launcher log shows a host-forwarding error such as `Could not set up host forwarding rule`, treat that as a strong signal that another QEMU instance may already be holding the forwarded port.
 - In that situation, inspect the existing QEMU process list first and prefer reusing the already-running VM instead of claiming the new launch succeeded.
 - Report clearly where the launcher log and guest console log are located.
+- Treat `vm_start_bg.sh`'s printed PID as **wrapper PID**, not proof that `qemu-system-aarch64` is alive.
+- Always perform a post-start handshake:
+  1. `ps` check for `qemu-system-aarch64`
+  2. socket check for `/tmp/qga.sock` and `/tmp/qemu-qmp.sock`
+  3. real QGA probe: `python3 .agents/tools/qga_exec.py 'echo qga_ok'`
 
 Default execution pattern:
 
@@ -59,6 +64,38 @@ Default execution pattern:
 4. If launch logs contain host-forward setup failures, directly reuse the existing QEMU instance.
 
 Note: the guest can be controlled either via **SSH** (when available) or via **QEMU Guest Agent (QGA)** using `.agents/tools/qga_exec.py` (when SSH is unavailable/blocked or the user requests QGA).
+
+### QGA-first start runbook (mandatory when QGA is required)
+
+Use this ordered flow. Do not skip verification steps.
+
+1. Source `.vars.sh`.
+2. Start VM in background with `scripts/vm_start_bg.sh` (or equivalent wrapper).
+3. Verify `qemu-system-aarch64` exists in process list.
+4. Verify sockets exist:
+   - `/tmp/qga.sock`
+   - `/tmp/qemu-qmp.sock`
+5. Verify QGA handshake succeeds with a real command:
+   - `python3 .agents/tools/qga_exec.py 'echo qga_ok && uname -a'`
+6. If handshake succeeds, continue with test execution.
+
+### QGA startup failure modes observed in real runs
+
+Treat the following as first-class, reusable troubleshooting knowledge:
+
+- **False-positive background start**
+  - Symptom: wrapper exits `0`, logs only show config header, no `qemu-system-aarch64` process.
+  - Action: do not claim VM up; verify real process and fallback to foreground probe.
+- **Socket exists but QGA command fails with `ConnectionRefusedError`**
+  - Symptom: `/tmp/qga.sock` exists, but no active server behind it.
+  - Action: treat as startup failure; re-check process tree and relaunch.
+- **Sandbox/no-permission bind failure**
+  - Symptom: `Failed to bind socket to /tmp/qga.sock: Operation not permitted`.
+  - Action: run VM start outside restricted sandbox.
+- **Foreground works but background appears flaky**
+  - Action: use foreground `qemu_start_ori.sh` in PTY as diagnosis mode, then switch back to verified background mode after root cause is clear.
+
+Detailed troubleshooting checklist: [`references/qga-startup-troubleshooting.md`](references/qga-startup-troubleshooting.md)
 
 ## QEMU stop policy
 
@@ -154,6 +191,33 @@ Recommended order:
 4. Run a small probe command.
 5. Execute the intended guest command through the chosen wrapper.
 6. Capture exit status and any relevant log path.
+
+## Script entrypoints and references
+
+When these scripts are available under this skill's `scripts/`, prefer them over ad-hoc command reconstruction.
+
+- `scripts/vm_start_bg.sh`:
+  reference: [`references/script-vm_start_bg.md`](references/script-vm_start_bg.md)
+- `scripts/vm_stop.sh`:
+  reference: [`references/script-vm_stop.md`](references/script-vm_stop.md)
+- `scripts/vm_ssh.sh`:
+  reference: [`references/script-vm_ssh.md`](references/script-vm_ssh.md)
+- `scripts/vm_enable_dyn_debug.sh`:
+  reference: [`references/script-vm_enable_dyn_debug.md`](references/script-vm_enable_dyn_debug.md)
+- `scripts/vm_hunt_trunc_write_delete.sh`:
+  reference: [`references/script-vm_hunt_trunc_write_delete.md`](references/script-vm_hunt_trunc_write_delete.md)
+- `scripts/vm_hunt_rwtest_deadlock_watch.sh`:
+  reference: [`references/script-vm_hunt_rwtest_deadlock_watch.md`](references/script-vm_hunt_rwtest_deadlock_watch.md)
+
+Rule: if script behavior and SKILL prose differ, update both SKILL and references together in the same change set.
+
+Deadlock-hunting note:
+
+- Do not treat `D` state as deadlock by itself.
+- For this workspace's inline-encryption hunt, prefer a two-phase confirmation:
+  1. sustained `rw_test.py` `D` state window
+  2. repeated `sysrq w/t/l` snapshots separated by a gap
+  3. classify as deadlock-suspect only when key stack signatures remain stable and workload log shows no forward progress.
 
 ## Build policy
 
