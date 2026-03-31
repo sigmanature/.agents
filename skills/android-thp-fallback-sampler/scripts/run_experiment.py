@@ -24,6 +24,8 @@ import argparse
 import csv
 import json
 import os
+import pty
+import select
 import shlex
 import subprocess
 import sys
@@ -54,6 +56,44 @@ def _run(cmd: List[str], timeout_s: int = 60, check: bool = False) -> subprocess
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, check=check)
 
 
+def _run_with_pty(cmd: List[str], timeout_s: int = 60) -> subprocess.CompletedProcess:
+    master_fd, slave_fd = pty.openpty()
+    proc = subprocess.Popen(cmd, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, close_fds=True)
+    os.close(slave_fd)
+
+    chunks: List[bytes] = []
+    deadline = time.time() + timeout_s
+
+    try:
+        while True:
+            if time.time() > deadline:
+                proc.kill()
+                proc.wait(timeout=5)
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout_s)
+
+            ready, _, _ = select.select([master_fd], [], [], 0.2)
+            if master_fd in ready:
+                try:
+                    data = os.read(master_fd, 4096)
+                except OSError:
+                    data = b""
+                if data:
+                    chunks.append(data)
+                elif proc.poll() is not None:
+                    break
+
+            if proc.poll() is not None and master_fd not in ready:
+                break
+    finally:
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+    stdout = b"".join(chunks).decode("utf-8", "ignore")
+    return subprocess.CompletedProcess(cmd, proc.returncode or 0, stdout=stdout, stderr="")
+
+
 def adb_devices() -> List[str]:
     cp = _run(["adb", "devices"], timeout_s=20, check=True)
     serials: List[str] = []
@@ -82,14 +122,27 @@ def adb_base(serial: str) -> List[str]:
     return ["adb", "-s", serial]
 
 
-def adb_shell(serial: str, cmd: str, use_su: bool, timeout_s: int = 30) -> str:
+def adb_shell(serial: str, cmd: str, use_su: bool, timeout_s: int = 30,
+              tty: bool = False) -> str:
     base = adb_base(serial)
     if use_su:
         # Run via: su -c 'sh -c <cmd>' so redirection/pipes work.
         wrapped = f"sh -c {shlex.quote(cmd)}"
-        cp = _run(base + ["shell", "su", "-c", wrapped], timeout_s=timeout_s)
+        shell_cmd = ["shell"]
+        if tty:
+            shell_cmd.extend(["-t", "-t"])
+            remote_cmd = f"su -c {shlex.quote(wrapped)}"
+            cp = _run_with_pty(base + shell_cmd + [remote_cmd], timeout_s=timeout_s)
+        else:
+            cp = _run(base + shell_cmd + ["su", "-c", wrapped], timeout_s=timeout_s)
     else:
-        cp = _run(base + ["shell", "sh", "-c", cmd], timeout_s=timeout_s)
+        shell_cmd = ["shell"]
+        if tty:
+            shell_cmd.extend(["-t", "-t"])
+            remote_cmd = f"sh -c {shlex.quote(cmd)}"
+            cp = _run_with_pty(base + shell_cmd + [remote_cmd], timeout_s=timeout_s)
+        else:
+            cp = _run(base + shell_cmd + ["sh", "-c", cmd], timeout_s=timeout_s)
 
     if cp.returncode != 0:
         raise RuntimeError((cp.stderr or cp.stdout or "adb shell failed").strip())
@@ -97,11 +150,11 @@ def adb_shell(serial: str, cmd: str, use_su: bool, timeout_s: int = 30) -> str:
 
 
 def adb_shell_retry(serial: str, cmd: str, use_su: bool, timeout_s: int,
-                    retries: int, retry_sleep_s: int) -> str:
+                    retries: int, retry_sleep_s: int, tty: bool = False) -> str:
     last_err: Optional[Exception] = None
     for i in range(max(1, retries + 1)):
         try:
-            return adb_shell(serial, cmd, use_su=use_su, timeout_s=timeout_s)
+            return adb_shell(serial, cmd, use_su=use_su, timeout_s=timeout_s, tty=tty)
         except Exception as e:
             last_err = e
             if i + 1 < max(1, retries + 1):
@@ -216,6 +269,7 @@ def ensure_thp_mode_for_stats(serial: str, stats_dir: str, use_su: bool, desired
             timeout_s=20,
             retries=max(0, retries),
             retry_sleep_s=max(0, retry_sleep_s),
+            tty=use_su,
         )
         return out.strip()
 
@@ -233,6 +287,7 @@ def ensure_thp_mode_for_stats(serial: str, stats_dir: str, use_su: bool, desired
             f.write("desired mode is none; check-only\n")
             return result
 
+        # Some devices only allow sysfs writes from an interactive root shell.
         cmd = f"echo {shlex.quote(desired)} > {enabled_path}"
         adb_shell_retry(
             serial,
@@ -241,6 +296,7 @@ def ensure_thp_mode_for_stats(serial: str, stats_dir: str, use_su: bool, desired
             timeout_s=20,
             retries=max(0, retries),
             retry_sleep_s=max(0, retry_sleep_s),
+            tty=use_su,
         )
 
         after = _read_enabled()

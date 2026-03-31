@@ -41,7 +41,7 @@ adb devices
 
 ### 1) 可选：批量安装 APK
 
-> 批量安装能力由 `wechat-wxapkg-and-apk-batch-tools` skill 统一维护（含 `adb install-multi-package` 加速与区间逻辑），本 skill 仅复用该能力。
+> 批量安装能力由 `wechat-wxapkg-and-apk-batch-tools` skill 统一维护，本 skill 仅复用该能力。
 
 ```bash
 python3 scripts/apk_batch_install.py ./apks --output-dir ./output/apk_install_run_001
@@ -108,6 +108,7 @@ python3 scripts/run_experiment.py \
 - **计数器是累计值**：一定用 `derived.csv` 里的 Δ 计算比率，而不是直接用 raw。
 - adb 偶发断开：脚本会对采样做重试，失败会记录 `error` 字段但继续跑。
 - setup 命令带重定向：本工具会统一通过 `sh -c` 执行；需要 root 的话配合 `--use-su`。
+- 某些设备写 `.../enabled` 这类 sysfs 节点时，`adb shell su -c` 不够，必须带 TTY；脚本里的 THP ensure 写入已按这个方式处理。
 
 ---
 
