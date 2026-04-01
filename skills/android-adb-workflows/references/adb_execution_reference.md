@@ -199,6 +199,29 @@ adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActi
 adb shell pm path com.example.app
 ```
 
+### Stop monkey immediately
+
+Single device:
+
+```bash
+adb -s <SERIAL> shell 'pkill -f com.android.commands.monkey || for p in $(pidof com.android.commands.monkey); do kill -9 $p; done'
+adb -s <SERIAL> shell input keyevent KEYCODE_HOME
+adb -s <SERIAL> shell pidof com.android.commands.monkey
+```
+
+All connected devices:
+
+```bash
+for s in $(adb devices | awk 'NR>1 && $2=="device" {print $1}'); do
+  adb -s "$s" shell 'pkill -f com.android.commands.monkey || for p in $(pidof com.android.commands.monkey); do kill -9 $p; done'
+  adb -s "$s" shell input keyevent KEYCODE_HOME
+done
+```
+
+Notes:
+- monkey is device-side; disconnecting USB does not reliably stop it
+- if the workload was launched by a host wrapper, the wrapper may still continue until its own cleanup path finishes
+
 ### Collect last 200 dropbox lines related to crashes
 
 ```bash

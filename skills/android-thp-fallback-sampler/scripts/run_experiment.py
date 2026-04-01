@@ -139,10 +139,12 @@ def adb_shell(serial: str, cmd: str, use_su: bool, timeout_s: int = 30,
         shell_cmd = ["shell"]
         if tty:
             shell_cmd.extend(["-t", "-t"])
-            remote_cmd = f"sh -c {shlex.quote(cmd)}"
-            cp = _run_with_pty(base + shell_cmd + [remote_cmd], timeout_s=timeout_s)
+            cp = _run_with_pty(base + shell_cmd + [cmd], timeout_s=timeout_s)
         else:
-            cp = _run(base + shell_cmd + ["sh", "-c", cmd], timeout_s=timeout_s)
+            # For non-root commands, let `adb shell` execute the remote command string directly.
+            # This avoids an extra `sh -c` layer that can mangle argv-style tools such as
+            # `input` / `wm` on some Android builds.
+            cp = _run(base + shell_cmd + [cmd], timeout_s=timeout_s)
 
     if cp.returncode != 0:
         raise RuntimeError((cp.stderr or cp.stdout or "adb shell failed").strip())
@@ -186,13 +188,13 @@ def prepare_device_for_monkey(serial: str, out_dir: Path, retries: int, retry_sl
     """
     log_path = out_dir / "device_prepare_log.txt"
     cmds = [
-        "cmd input keyboard keyevent 224 || true",
-        "cmd window dismiss-keyguard || true",
-        "cmd input keyboard keyevent 82 || true",
-        "cmd input touchscreen swipe 300 1400 300 400 200 || true",
+        "input keyevent KEYCODE_WAKEUP || true",
+        "wm dismiss-keyguard || true",
+        "input keyevent KEYCODE_MENU || true",
+        "input swipe 300 1400 300 400 200 || true",
         "svc power stayon true || true",
-        "cmd settings put global stay_on_while_plugged_in 3 || true",
-        "cmd settings put system screen_off_timeout 1800000 || true",
+        "settings put global stay_on_while_plugged_in 3 || true",
+        "settings put system screen_off_timeout 1800000 || true",
     ]
 
     with log_path.open("a", encoding="utf-8") as f:

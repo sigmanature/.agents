@@ -45,6 +45,7 @@ If multi-device, include `--serial <SERIAL>`.
 - `--events 50000`
 - `--throttle 75`
 - `--seed <generated and printed by script>`
+- native crashes are ignored by default so monkey keeps running; pass `--abort-on-native-crash` only when you explicitly want crash-stop semantics
 
 After generating the command, list key output files:
 - `logcat_all_threadtime.txt`
@@ -54,6 +55,18 @@ After generating the command, list key output files:
 - `dumpsys_dropbox_print.txt`
 - `device_artifacts/` (only if `su` available)
 - `summary.txt`
+
+If the user asks to stop monkey quickly, use the shipped stop script:
+
+```bash
+chmod +x scripts/stop_monkey_now.sh
+./scripts/stop_monkey_now.sh --serial <SERIAL>
+```
+
+Notes to state explicitly:
+- monkey runs on the device; unplugging USB does not reliably stop it
+- `stop_monkey_now.sh` kills `com.android.commands.monkey` on device and sends `KEYCODE_HOME`
+- if the user also launched a host wrapper such as `run_experiment.py`, killing device monkey stops the workload but the host wrapper may still continue sampling until its own exit logic runs
 
 ### B) User asks “how do I quickly get package names?” or run in try mode
 Use `scripts/adb_pkg.sh`.
@@ -72,6 +85,7 @@ Load `references/adb_execution_reference.md` and follow its recommended patterns
 
 ## Included resources
 - `scripts/run_monkey_and_collect_logs.sh`
+- `scripts/stop_monkey_now.sh`
 - `scripts/adb_pkg.sh`
 - `scripts/adb_helpers.sh` (optional helpers for scripts; safe quoting patterns)
 - `references/adb_execution_reference.md`

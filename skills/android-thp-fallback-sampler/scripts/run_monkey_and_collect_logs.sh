@@ -12,6 +12,7 @@ OUT_DIR=""
 DO_BUGREPORT=0
 GLOBAL_MODE=0
 CLEAR_LOGCAT=0
+ABORT_ON_NATIVE_CRASH=0
 
 usage() {
   cat <<'EOF'
@@ -32,6 +33,7 @@ Options:
   --out <dir>                output dir (default: ./monkey_logs/<serial>_<timestamp>)
   --bugreport                capture adb bugreport at end (can be slow)
   --clear-logcat             clear log buffers before starting (destructive)
+  --abort-on-native-crash    stop monkey when a native crash is detected
   -h, --help                 show help
 
 Examples:
@@ -53,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --out) OUT_DIR="${2:-}"; shift 2;;
     --bugreport) DO_BUGREPORT=1; shift;;
     --clear-logcat) CLEAR_LOGCAT=1; shift;;
+    --abort-on-native-crash) ABORT_ON_NATIVE_CRASH=1; shift;;
     -h|--help) usage; exit 0;;
     *) echo "Unknown arg: $1" >&2; usage; exit 2;;
   esac
@@ -148,7 +151,10 @@ if [[ "$HAS_SU" -eq 1 ]]; then
 fi
 
 # Monkey command.
-SAFE_FLAGS="--pct-syskeys 0 --pct-majornav 0 --ignore-crashes --ignore-timeouts --monitor-native-crashes --kill-process-after-error -v -v"
+SAFE_FLAGS="--pct-syskeys 0 --pct-majornav 0 --ignore-crashes --ignore-timeouts --ignore-native-crashes -v -v"
+if [[ "$ABORT_ON_NATIVE_CRASH" -eq 1 ]]; then
+  SAFE_FLAGS="--pct-syskeys 0 --pct-majornav 0 --ignore-crashes --ignore-timeouts --monitor-native-crashes --kill-process-after-error -v -v"
+fi
 PKG_PART=""
 if [[ "$GLOBAL_MODE" -eq 0 ]]; then
   for _pkg in "${PKGS[@]}"; do

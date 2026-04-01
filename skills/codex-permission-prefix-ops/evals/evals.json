@@ -1,0 +1,17 @@
+{
+  "skill_name": "codex-permission-prefix-ops",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我安装一个开源免费的浏览器 skill，并且别再每个 read-only 命令都单独弹权限了。",
+      "expected_output": "The skill should classify the approval causes, request reusable prefix rules, prefer script-driven install/testing, and verify vendor skill links after install.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "为什么 `npx skills find` 和 `npm view` 这种读命令也会被拦？顺手把安装好的 skill 接到 Codex 里。",
+      "expected_output": "The skill should explain network-disabled sandbox behavior, recommend stable prefix rules, and use the sync script when ~/.codex/skills is missing the installed skill.",
+      "files": []
+    }
+  ]
+}
