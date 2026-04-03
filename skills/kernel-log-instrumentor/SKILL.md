@@ -1,6 +1,6 @@
 ---
 name: kernel-log-instrumentor
-description: "generate linux kernel debug instrumentation plans and patch-ready snippets for printk/pr_emerg, pr_debug with dynamic_debug, and tracepoints. use when asked to add kernel logs, track key state variables (loop-carried or shared), debug locks/condition variables, reduce printk noise by switching to pr_debug, or upgrade hot-path logs to tracepoints. enforce: logs go on a temporary git branch with one easy-to-revert commit; default to pr_debug plus dynamic_debug for temporary high-volume logs; printk uses kern_emerg only for low-frequency must-see events; all logs print __func__; concurrency logs include lock+ and lock- pairs with predicate fields and health rules."
+description: "generate linux kernel debug instrumentation plans and patch-ready snippets for printk/pr_emerg, pr_debug with dynamic_debug, and tracepoints. use when asked to add kernel logs, track key state variables (loop-carried or shared), debug locks/condition variables, reduce printk noise by switching to pr_debug, upgrade hot-path logs to tracepoints, or turn detailed key=value logs into a queryable table for filtering by inode/pid/seq/shared-object ids. enforce: logs go on a temporary git branch with one easy-to-revert commit; default to pr_debug plus dynamic_debug for temporary high-volume logs; printk uses kern_emerg only for low-frequency must-see events; all logs print __func__; concurrency logs include lock+ and lock- pairs with predicate fields and health rules."
 ---
 
 # Kernel Log Instrumentor
@@ -12,6 +12,7 @@ When asked to "add kernel logs" or "instrument" linux kernel code, produce:
 2. **Logging plan** (what to log, where, and why)
 3. **Patch-ready snippets** (printk/pr_emerg or tracepoint templates)
 4. **Log health rules** (especially for concurrency)
+5. **Table-read workflow** when the user needs to filter logs by ids across threads
 
 Keep output actionable: commands, exact insertion points, and consistent log format.
 
@@ -45,6 +46,11 @@ Otherwise, either mind the user or stash users' changes.
 6. **If concurrency is involved, apply concurrency rules**
    - If the code uses locks/rwsem/atomics/wait queues/completions/rcu, follow [references/concurrency-logging.md](references/concurrency-logging.md).
 
+7. **If the user wants to track one object across many threads, switch to table mode**
+   - Design log lines so each line is a self-contained row with stable `k=v` fields.
+   - Include both actor ids (`pid`, `comm`, `cpu`) and shared-object ids (`ino`, `index`, `folio`, `seq`, custom ids).
+   - Explain how to query the resulting log with [references/log-table-workflow.md](references/log-table-workflow.md) and `scripts/kernel_log_kv_query.py`.
+
 ## Output format
 Unless the user asks otherwise, respond in this structure:
 
@@ -65,6 +71,7 @@ Unless the user asks otherwise, respond in this structure:
 
 ### 5) How to read the logs
 - Apply "healthy vs suspicious" rules (especially concurrency)
+- When relevant, show one or two concrete query commands that treat the log as a table
 
 ## Non-negotiable rules
 - **Temporary branch, reversible:** never suggest landing logs directly on main.
@@ -73,6 +80,7 @@ Unless the user asks otherwise, respond in this structure:
 - **Always print function name:** every line includes `__func__` (directly or via macro).
 - **Stable prefix:** every line starts with a short tag so it can be grepped.
 - **Runtime control:** when using `pr_debug()`, provide exact dynamic_debug commands or a helper script path to enable the selected callsites before testing and disable them afterward.
+- **Table-friendly rows for multi-thread debug:** if the user is tracking a shared object across threads, ensure each relevant log line contains the same queryable ids and avoids prose-only fields.
 
 ## References
 - [references/log-format.md](references/log-format.md)
@@ -80,3 +88,4 @@ Unless the user asks otherwise, respond in this structure:
 - [references/concurrency-logging.md](references/concurrency-logging.md)
 - [references/detail-mode.md](references/detail-mode.md)
 - [references/tracepoint-upgrade.md](references/tracepoint-upgrade.md)
+- [references/log-table-workflow.md](references/log-table-workflow.md)

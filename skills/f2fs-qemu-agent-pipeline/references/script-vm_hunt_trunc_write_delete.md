@@ -24,7 +24,7 @@ What it does:
 
 Run via QGA example:
 ```bash
-python3 .agents/tools/qga_exec.py 'nohup /bin/bash /tmp/hunt/run_unaligned_trunc_write_delete.sh >/tmp/hunt/nohup_twd.log 2>&1 &'
+python3 scripts/qga_exec.py 'nohup /bin/bash /tmp/hunt/run_unaligned_trunc_write_delete.sh >/tmp/hunt/nohup_twd.log 2>&1 &'
 ```
 
 Validation hints:

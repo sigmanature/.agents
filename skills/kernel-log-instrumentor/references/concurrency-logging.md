@@ -6,6 +6,7 @@ When debugging concurrency, logs must make it possible to answer:
 - **for how long**
 - **what predicate/state** was true at acquire and before release
 - **whether progress happened** between lock+ and lock-
+- **which shared object** the threads were contending on
 
 ## Lock boundary placement (mandatory)
 For each critical section:
@@ -28,6 +29,15 @@ Every lock+ / lock- line should include the same correlation fields:
 - `cpu`, `pid`, `comm`
 - `seq=<monotonic sequence>` (optional but very useful)
 - `t0=<time>` and/or `dt=<hold time>` if practical
+- one or more shared-object ids such as `ino=`, `index=`, `folio=`, `nid=`, `req=`
+
+## Shared-object tracking rule
+When the real bug is "many threads touching the same inode/object", every relevant log line must include:
+- actor ids: `pid`, `comm`, `cpu`
+- object ids: stable ids for the shared object
+- decision fields: the predicates or counters that explain why this thread did what it did
+
+If the user says they want to follow one inode/request/folio across threads, explicitly design the logs so they can be filtered as a table by that id.
 
 ### Hold time measurement
 If you need hold time:

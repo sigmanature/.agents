@@ -55,6 +55,7 @@ Use `kernel-log-instrumentor` rules:
 - keep logs in one commit,
 - default to `pr_debug` + dynamic_debug,
 - include `__func__` and stable log prefix.
+- if the user needs to follow one shared object across many threads, explicitly switch to table-friendly `k=v` logging and plan the query commands up front.
 
 Guardrail: new log lines must not introduce fresh pointer dereference risk. Prefer printing raw pointers/flags/scalars first.
 
@@ -103,6 +104,9 @@ Correlation requirement:
 
 - identify the last N debug lines before first Oops/BUG,
 - map to function + decision branch + key state fields.
+- when logs are table-friendly, query them as structured rows before doing free-form reading:
+  - generic: `python3 /home/nzzhao/.agents/skills/kernel-log-instrumentor/scripts/kernel_log_kv_query.py <log> ...`
+  - existing F2FS WBDBG/sysrq logs: `bash /home/nzzhao/.agents/skills/kernel-log-instrumentor/scripts/f2fs_log_field_query.sh <log> ...`
 - when `sysrq` dumps are present, run pid/ino correlation script:
   - `/home/nzzhao/learn_os/scripts/f2fs_pid_ino_correlate.sh <kernel_stream.txt> 3 40`
   - use output to align blocked `pid` with nearby `[WBDBG] pid/ino` activity.

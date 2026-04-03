@@ -93,7 +93,43 @@ Prefer one smoke test that proves the install path works:
 
 If a read-only validation command still prompts, treat it as a sign that the binary prefix was not allow-listed broadly enough.
 
+For `open-websearch`, prefer the bundled wrapper [open_websearch_stdio_safe.sh](scripts/open_websearch_stdio_safe.sh) when you do not explicitly need HTTP mode:
+
+```bash
+bash scripts/open_websearch_stdio_safe.sh
+```
+
+Use [probe_open_websearch.py](scripts/probe_open_websearch.py) to verify startup mode, listener exposure, MCP initialization, and a real `search` call in the current environment:
+
+```bash
+python3 scripts/probe_open_websearch.py
+```
+
+## MCP audit workflow
+
+When the user asks whether an MCP is trustworthy, do not answer with a blanket yes/no unless you have audited the actual package on disk.
+
+Use [audit_node_package_risk.sh](scripts/audit_node_package_risk.sh) for a first-pass local audit of Node-based MCP servers and CLIs:
+
+```bash
+bash scripts/audit_node_package_risk.sh /abs/path/to/node_modules/<package>
+```
+
+The script is a triage tool, not a proof of safety. It surfaces:
+
+- lifecycle install hooks
+- embedded native binaries
+- child-process execution
+- dynamic code execution
+- broad network listeners
+- suspicious write/delete operations
+- hard-coded remote endpoints
+
+Then read [mcp-audit-checklist.md](references/mcp-audit-checklist.md) before deciding whether to trust the package enough for normal use.
+
 ## References
 
 - Read [prefix-rule-playbook.md](references/prefix-rule-playbook.md) when deciding how broad the next approval request should be.
 - Read [external-skill-install-notes.md](references/external-skill-install-notes.md) when `npx skills add` appears to install successfully but Codex still cannot see the skill.
+- Read [mcp-audit-checklist.md](references/mcp-audit-checklist.md) when evaluating whether an MCP is safe enough to install or run.
+- Read [open-websearch-sandbox-notes.md](references/open-websearch-sandbox-notes.md) for the tested behavior of `open-websearch` under this environment.

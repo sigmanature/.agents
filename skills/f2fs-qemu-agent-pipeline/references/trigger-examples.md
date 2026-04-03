@@ -15,7 +15,7 @@ Examples:
 
 - Start the prepared QEMU guest in the background and tell me where the logs are.
 - Run the guest command over SSH instead of opening a terminal.
-- SSH is unavailable; run the guest command or test script via `.agents/tools/qga_exec.py`.
+- SSH is unavailable; run the guest command or test script via `scripts/qga_exec.py`.
 - Check my changed F2FS files first, then do the full image build.
 - Verify whether the required mounts are really present before the test.
 - Do not tell me it worked unless the exit code proves it.

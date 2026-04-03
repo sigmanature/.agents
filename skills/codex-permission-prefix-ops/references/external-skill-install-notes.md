@@ -37,3 +37,12 @@ For `agent-browser`, the skill install and runtime install are separate:
 4. smoke test with a simple page
 
 Do not assume the skill install provides the CLI binary or browser runtime.
+
+## MCP runtime note
+
+For `open-websearch`, a naive `--help` invocation did not print usage and exit in this environment. It started the MCP server instead:
+
+- STDIO transport enabled
+- HTTP server running on port `3000`
+
+Treat that command as a startup probe, not a harmless help command. If you only want a bounded validation, be ready to stop the spawned process or run it under an explicit timeout/TTY-aware harness.

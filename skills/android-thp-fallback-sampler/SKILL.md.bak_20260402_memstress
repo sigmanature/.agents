@@ -7,7 +7,6 @@ description: automate long-running sampling of android anon 16KB large folio fal
 
 用来**稳定跑手机端长时间测试**：同时利用
 - monkey + adb 压力/切换 workload android-adb-workflows skill
-- memstress 启停循环 workload（快速启动多 app、保活一批、再 force-stop 一批）
 - adb 批量安装 APK wechat-wxapkg-and-apk-batch-tools skill
 
 并在测试期间按固定间隔采样：
@@ -25,7 +24,7 @@ description: automate long-running sampling of android anon 16KB large folio fal
 ## 什么时候用这个 skill
 
 - 你要对比不同开关组合（anon large folio / mTHP large folio / 其它）在**长时间运行**时 `anon_fallback` 比率是否随时间上升。
-- 你有一套可复现 workload（monkey、重内存 app 启停循环，或脚本），希望把**采样 + 压测 + 安装一堆 app**串成一键流程。
+- 你有一套可复现 workload（monkey 或脚本），希望把**采样 + 压测 + 安装一堆 app**串成一键流程。
 
 ---
 
@@ -71,27 +70,6 @@ python3 scripts/run_experiment.py \
   --monkey-package com.example.app
 ```
 
-### 3) 跑“采样 + memstress”长测
-
-适用于更强调内存占用与快速切换的场景：每轮快速启动多 app，保留一部分存活，再 force-stop 更早的 app，持续制造 app 工作集变化。
-
-```bash
-python3 scripts/run_experiment.py \
-  --duration-s 21600 \
-  --interval-s 60 \
-  --out-dir ./output/thp_memstress_001 \
-  --setup-shell "echo always > /sys/kernel/mm/transparent_hugepage/hugepages-16KB/enabled" \
-  --setup-shell "echo always > /sys/kernel/mm/transparent_hugepage/hugepages-16KB/anon" \
-  --workload memstress \
-  --memstress-package-file ./top100_packages.txt \
-  --memstress-heavy-package com.google.android.GoogleCamera \
-  --memstress-heavy-package com.google.android.apps.youtube.unplugged \
-  --memstress-burst-size 4 \
-  --memstress-heavy-per-burst 2 \
-  --memstress-max-alive 8 \
-  --memstress-hold-ms 5000
-```
-
 ---
 
 ## 产出文件
@@ -102,7 +80,6 @@ python3 scripts/run_experiment.py \
 - `derived.csv`：每个采样窗口的 Δ 以及 `fallback_ratio`
 - `summary.md`：总体比率 + 简单趋势摘要
 - `monkey/`：`run_monkey_and_collect_logs.sh` 的产物（logcat、stdout/stderr、dumpsys 等）
-- `memstress/`：`run_memstress_and_collect_logs.py` 的产物（轮次日志、resolved activities、logcat、summary）
 - `run_manifest.json`：本次运行的参数、serial、起止时间
 
 ---
@@ -118,21 +95,11 @@ python3 scripts/run_experiment.py \
 - `--use-su`：用 `su -c` 读 stats / 执行 setup（需要 root）
 - `--setup-shell <cmd>`：可重复，运行前执行（建议把开关设置放这）
 - `--apk-dir <dir>`：先批量安装该目录下的 `*.apk`
-- `--workload none|monkey|memstress`：选择 workload 后端；不传时按现有 monkey/memstress 参数自动推断
 - `--monkey none|global|package`
 - `--monkey-package <pkg>`：`package` 模式必填
 - `--monkey-throttle-ms <ms>`：默认 75
 - `--monkey-events <n>`：不填会按 duration+throttle 估算
 - `--monkey-extra "<flags>"`：追加 monkey flags（原样拼接）
-- `--memstress-package <pkg>` / `--memstress-package-file <file>`：memstress 的目标 app 集合
-- `--memstress-heavy-package <pkg>`：显式标记重型 app，优先在每轮启动
-- `--memstress-burst-size <n>`：每轮快速启动多少个 app
-- `--memstress-heavy-per-burst <n>`：每轮尽量包含多少个 heavy app
-- `--memstress-max-alive <n>`：最多保留多少个已启动 app 存活，再开始 force-stop 更早的 app
-- `--memstress-hold-ms <ms>`：一轮启动后保持多久再清理
-- `--memstress-launch-gap-ms <ms>`：同一轮内相邻 app 启动间隔
-- `--memstress-cycle-sleep-ms <ms>`：轮与轮之间的停顿
-- `--memstress-prefer-keywords <csv>`：对 package 名中命中 `camera/video/gallery/player/...` 的 app 自动偏置
 
 ---
 
@@ -144,7 +111,6 @@ python3 scripts/run_experiment.py \
 - 某些设备写 `.../enabled` 这类 sysfs 节点时，`adb shell su -c` 不够，必须带 TTY；脚本里的 THP ensure 写入已按这个方式处理。
 - 某些设备上，monkey 前的亮屏/解锁必须用朴素的 `input keyevent KEYCODE_WAKEUP`、`wm dismiss-keyguard`、`input swipe`；`cmd input keyboard ...` 这类写法可能不会真正把设备从 `Dozing` 拉到 `Awake`。
 - monkey runner 现在默认带 `--ignore-native-crashes`，避免某个 app 的 native crash 直接把整轮 workload 打断；只有显式传 `--abort-on-native-crash` 时才恢复 crash-stop 行为。
-- memstress 只会在你显式传入的 package 集合内循环，不会像 `monkey --global` 那样全域乱跑；如果想强行偏向相机/视频，优先传明确的 `--memstress-heavy-package`，不要只依赖关键词猜测。
 
 ---
 
@@ -153,7 +119,6 @@ python3 scripts/run_experiment.py \
 - `scripts/run_experiment.py`：一键跑采样 +（可选）安装 APK +（可选）monkey
 - `scripts/derive_metrics.py`：把 raw CSV 变成 derived+summary
 - `scripts/run_monkey_and_collect_logs.sh`：来自 android-adb-workflows
-- `scripts/run_memstress_and_collect_logs.py`：重内存 app 启停循环 workload
 - `scripts/apk_batch_install.py`：来自 wechat-wxapkg-and-apk-batch-tools（批量安装逻辑请参阅该 skill 的 SKILL.md）
 - `scripts/adb_pkg.sh`, `scripts/adb_helpers.sh`
 - `references/adb_execution_reference.md`, `references/monkey_flags.md`

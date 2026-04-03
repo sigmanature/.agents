@@ -244,11 +244,6 @@ References should help the next run avoid rediscovering the same pitfalls.
 When a new skill is created, install it through the repository's unified skill entry process.
 Do not leave a new skill unregistered or silently added.
 
-Default installation target:
-- unless the capability is clearly repo-specific, install new skills to the user-level skill tree under `~/.agents/skills`
-- treat user-wide workflows, global tool behavior, shell wrappers, Codex behavior changes, and cross-repo reusable automation as user-level by default
-- only keep a skill inside the current repo when the workflow is tightly bound to that repo's codebase, paths, or operating model
-
 When scripts or references are added and they materially affect skill usage, update the owning skill entrypoint in the same task.
 
 ---

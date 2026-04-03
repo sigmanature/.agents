@@ -32,6 +32,14 @@ Connect two views of the same incident:
    - `all blocked windows comm clusters (all pids)`
    - `focus clusters (all blocked windows)`
    - `global pid->ino`
+4. For tighter windows around one inode or pid, also run:
+
+```bash
+bash /home/nzzhao/.agents/skills/kernel-log-instrumentor/scripts/f2fs_log_field_query.sh \
+  /path/to/kernel_stream.txt --type wbdbg --eq ino=10591
+```
+
+This treats the WBDBG stream as a table so you can filter one `ino` or `pid` across multiple threads.
 
 ## Interpretation rules
 

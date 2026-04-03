@@ -23,7 +23,7 @@ Prints key-value lines:
 - Must follow with explicit post-check:
   - process: `ps ... qemu-system-aarch64`
   - sockets: `/tmp/qga.sock`, `/tmp/qemu-qmp.sock`
-  - handshake: `python3 .agents/tools/qga_exec.py 'echo qga_ok'`
+  - handshake: `python3 scripts/qga_exec.py 'echo qga_ok'`
 
 ## Common failures
 - wrapper exits quickly without useful logs

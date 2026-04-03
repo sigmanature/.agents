@@ -5,14 +5,14 @@
 This script is host-side: it uses `adb` to talk to the device.
 It can optionally:
 - batch install APKs (by calling apk_batch_install.py)
-- run a workload backend such as monkey or memstress
+- run monkey workload (by calling run_monkey_and_collect_logs.sh)
 - sample /sys/kernel/mm/transparent_hugepage/hugepages-*/stats/* periodically
 
 Outputs (under --out-dir):
 - raw_samples.csv
 - derived.csv
 - summary.md
-- monkey/ or memstress/ (if workload enabled)
+- monkey/ (if monkey enabled)
 - run_manifest.json
 
 Designed for stability: retries ADB sampling on transient failures.
@@ -368,25 +368,6 @@ def compute_monkey_events(duration_s: int, throttle_ms: int) -> int:
     return max(est, 10_000)
 
 
-def read_package_file(path_str: Optional[str]) -> List[str]:
-    if not path_str:
-        return []
-    path = Path(path_str)
-    if not path.exists():
-        raise FileNotFoundError(f"package file not found: {path}")
-    pkgs: List[str] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        x = line.strip()
-        if not x or x.startswith("#"):
-            continue
-        pkgs.append(x)
-    return pkgs
-
-
-def unique_preserve_order(items: List[str]) -> List[str]:
-    return list(dict.fromkeys(items))
-
-
 def start_monkey(skill_dir: Path, serial: str, out_dir: Path, mode: str, pkgs: Optional[List[str]],
                  throttle_ms: int, events: Optional[int], extra: str, clear_logcat: bool) -> Optional[subprocess.Popen]:
     if mode == "none":
@@ -418,55 +399,6 @@ def start_monkey(skill_dir: Path, serial: str, out_dir: Path, mode: str, pkgs: O
         args += ["--extra", extra]
 
     # Run in background.
-    return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-
-def start_memstress(skill_dir: Path, serial: str, out_dir: Path, pkgs: List[str], heavy_pkgs: List[str],
-                    duration_s: int, burst_size: int, heavy_per_burst: int, max_alive: int,
-                    hold_ms: int, launch_gap_ms: int, cycle_sleep_ms: int, prefer_keywords: str,
-                    seed: Optional[int], clear_logcat: bool) -> subprocess.Popen:
-    if not pkgs:
-        raise ValueError("memstress workload requires at least one package")
-
-    runner = skill_dir / "run_memstress_and_collect_logs.py"
-    memstress_out = out_dir / "memstress"
-    memstress_out.mkdir(parents=True, exist_ok=True)
-
-    args = [
-        sys.executable,
-        str(runner),
-        "--serial",
-        serial,
-        "--out",
-        str(memstress_out),
-        "--duration-s",
-        str(duration_s),
-        "--burst-size",
-        str(burst_size),
-        "--heavy-per-burst",
-        str(heavy_per_burst),
-        "--max-alive",
-        str(max_alive),
-        "--hold-ms",
-        str(hold_ms),
-        "--launch-gap-ms",
-        str(launch_gap_ms),
-        "--cycle-sleep-ms",
-        str(cycle_sleep_ms),
-        "--prefer-keywords",
-        prefer_keywords,
-    ]
-
-    if clear_logcat:
-        args.append("--clear-logcat")
-    if seed is not None:
-        args += ["--seed", str(seed)]
-
-    for pkg in pkgs:
-        args += ["--package", pkg]
-    for pkg in heavy_pkgs:
-        args += ["--heavy-package", pkg]
-
     return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
@@ -525,7 +457,7 @@ def read_counters_once(serial: str, stats_dir: str, counters: List[str], use_su:
 
 def sample_loop(serial: str, stats_dir: str, counters: List[str], use_su: bool,
                 interval_s: int, duration_s: int, out_csv: Path,
-                retries: int, retry_sleep_s: int, workload_proc: Optional[subprocess.Popen]) -> Tuple[int, int]:
+                retries: int, retry_sleep_s: int, monkey_proc: Optional[subprocess.Popen]) -> Tuple[int, int]:
     """Returns (num_samples, num_errors)."""
 
     fieldnames = ["host_ts", "device_ts", "error"] + counters
@@ -574,8 +506,8 @@ def sample_loop(serial: str, stats_dir: str, counters: List[str], use_su: bool,
             if s.error:
                 num_err += 1
 
-            # If the workload already finished, we still keep sampling until duration ends.
-            _ = workload_proc.poll() if workload_proc else None
+            # If monkey already finished, we still keep sampling until duration ends.
+            _ = monkey_proc.poll() if monkey_proc else None
 
             next_t += interval_s
 
@@ -612,9 +544,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     p.add_argument("--apk-dir", default=None, help="Directory of *.apk to install before running")
 
-    p.add_argument("--workload", default=None, choices=["none", "monkey", "memstress"],
-                   help="Top-level workload backend. Default: infer from monkey/memstress args.")
-
     p.add_argument("--monkey", default="none", choices=["none", "global", "package"], help="Monkey mode")
     p.add_argument("--monkey-package", action="append", default=None, dest="monkey_package",
                    help="Package name for monkey package mode (repeatable for multiple packages)")
@@ -623,45 +552,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--monkey-throttle-ms", type=int, default=75, help="Monkey throttle ms")
     p.add_argument("--monkey-events", type=int, default=None, help="Monkey events; default computed from duration/throttle")
     p.add_argument("--monkey-extra", default="", help="Extra monkey flags appended verbatim")
-    p.add_argument("--clear-logcat", action="store_true", help="Clear logcat buffers before workload start (destructive)")
+    p.add_argument("--clear-logcat", action="store_true", help="Clear logcat buffers before monkey (destructive)")
     p.add_argument("--device-prepare", dest="device_prepare", action="store_true", default=True,
-                   help="Before workload: wake/unlock device and set stay-awake (default: enabled)")
+                   help="Before monkey: wake/unlock device and set stay-awake (default: enabled)")
     p.add_argument("--no-device-prepare", dest="device_prepare", action="store_false",
-                   help="Disable pre-workload wake/unlock/stay-awake preparation")
+                   help="Disable pre-monkey wake/unlock/stay-awake preparation")
     p.add_argument("--device-prepare-retries", type=int, default=5,
-                   help="Retries for pre-workload device prepare checks")
+                   help="Retries for pre-monkey device prepare checks")
     p.add_argument("--device-prepare-retry-s", type=int, default=3,
-                   help="Sleep seconds between pre-workload prepare retries")
+                   help="Sleep seconds between pre-monkey prepare retries")
     p.add_argument("--monkey-start-retries", type=int, default=2,
                    help="Retries when monkey runner exits immediately after start")
     p.add_argument("--monkey-start-retry-s", type=int, default=5,
                    help="Sleep seconds between monkey start retries")
-
-    p.add_argument("--memstress-package", action="append", default=None, dest="memstress_package",
-                   help="Package name for memstress workload (repeatable)")
-    p.add_argument("--memstress-package-file", default=None,
-                   help="Path to file with memstress package names (one per line, # comments allowed)")
-    p.add_argument("--memstress-heavy-package", action="append", default=None, dest="memstress_heavy_package",
-                   help="Explicit heavy package for memstress priority (repeatable)")
-    p.add_argument("--memstress-heavy-package-file", default=None,
-                   help="Path to file with heavy memstress packages")
-    p.add_argument("--memstress-burst-size", type=int, default=4,
-                   help="How many apps to launch per memstress burst")
-    p.add_argument("--memstress-heavy-per-burst", type=int, default=2,
-                   help="Preferred heavy apps launched per memstress burst")
-    p.add_argument("--memstress-max-alive", type=int, default=8,
-                   help="Keep at most this many memstress apps alive before force-stopping oldest ones")
-    p.add_argument("--memstress-hold-ms", type=int, default=5000,
-                   help="How long to hold after each launch burst before cleanup")
-    p.add_argument("--memstress-launch-gap-ms", type=int, default=350,
-                   help="Gap between app launches inside a memstress burst")
-    p.add_argument("--memstress-cycle-sleep-ms", type=int, default=1000,
-                   help="Gap between memstress bursts")
-    p.add_argument("--memstress-prefer-keywords",
-                   default="camera,video,recorder,player,gallery,photo,media,stream",
-                   help="Comma-separated keywords used to auto-bias heavy packages in memstress")
-    p.add_argument("--memstress-seed", type=int, default=None,
-                   help="Optional deterministic seed for memstress package shuffling")
 
     p.add_argument("--out-dir", default=None, help="Output directory")
     p.add_argument("--sample-retries", type=int, default=2, help="Retries per sample on adb failure")
@@ -717,39 +620,28 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     counters = [c.strip() for c in args.counters.split(",") if c.strip()]
 
-    # Merge workload package sources.
+    # Merge monkey packages from CLI and optional package file.
     monkey_pkgs: List[str] = list(args.monkey_package or [])
-    monkey_pkgs.extend(read_package_file(args.monkey_package_file))
-    monkey_pkgs = unique_preserve_order(monkey_pkgs)
+    if args.monkey_package_file:
+        pkg_path = Path(args.monkey_package_file)
+        if not pkg_path.exists():
+            raise FileNotFoundError(f"monkey package file not found: {pkg_path}")
+        for line in pkg_path.read_text(encoding="utf-8").splitlines():
+            x = line.strip()
+            if not x or x.startswith("#"):
+                continue
+            monkey_pkgs.append(x)
 
-    memstress_pkgs: List[str] = list(args.memstress_package or [])
-    memstress_pkgs.extend(read_package_file(args.memstress_package_file))
-    memstress_pkgs = unique_preserve_order(memstress_pkgs)
+    # de-dup while preserving order
+    monkey_pkgs = list(dict.fromkeys(monkey_pkgs))
 
-    memstress_heavy_pkgs: List[str] = list(args.memstress_heavy_package or [])
-    memstress_heavy_pkgs.extend(read_package_file(args.memstress_heavy_package_file))
-    memstress_heavy_pkgs = unique_preserve_order(memstress_heavy_pkgs)
-
-    workload = args.workload
-    if workload is None:
-        if args.monkey != "none":
-            workload = "monkey"
-        elif memstress_pkgs:
-            workload = "memstress"
-        else:
-            workload = "none"
-
-    manifest["workload"] = {"type": workload, "status": "configured"}
-    (out_dir / "run_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-    # Start workload.
+    # Start monkey
     monkey_events = args.monkey_events
-    if workload == "monkey" and monkey_events is None:
+    if args.monkey != "none" and monkey_events is None:
         monkey_events = compute_monkey_events(args.duration_s, args.monkey_throttle_ms)
 
-    workload_proc: Optional[subprocess.Popen] = None
-    workload_log_prefix = "workload"
-    if workload in ("monkey", "memstress"):
+    monkey_proc: Optional[subprocess.Popen] = None
+    if args.monkey != "none":
         if args.device_prepare:
             prepare_device_for_monkey(
                 serial=serial,
@@ -757,24 +649,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 retries=max(1, args.device_prepare_retries),
                 retry_sleep_s=max(0, args.device_prepare_retry_s),
             )
-    if workload == "monkey":
-        workload_log_prefix = "monkey"
-        manifest["workload"]["config"] = {
-            "mode": args.monkey,
-            "packages": monkey_pkgs,
-            "throttle_ms": args.monkey_throttle_ms,
-            "events": monkey_events,
-            "extra": args.monkey_extra,
-            "clear_logcat": args.clear_logcat,
-        }
-        (out_dir / "run_manifest.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
 
         start_attempts = max(1, args.monkey_start_retries)
         last_start_err = ""
         for attempt in range(1, start_attempts + 1):
-            workload_proc = start_monkey(
+            monkey_proc = start_monkey(
                 skill_dir=skill_dir,
                 serial=serial,
                 out_dir=out_dir,
@@ -786,13 +665,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 clear_logcat=args.clear_logcat,
             )
 
+            # If it survives initial startup window, treat as started.
             time.sleep(3)
-            rc = workload_proc.poll() if workload_proc else None
+            rc = monkey_proc.poll() if monkey_proc else None
             if rc is None:
                 break
 
+            # Early exit: collect diagnostics and retry after re-prepare.
             try:
-                out, err = workload_proc.communicate(timeout=5)
+                out, err = monkey_proc.communicate(timeout=5)
             except Exception:
                 out, err = "", ""
             (out_dir / f"monkey_start_attempt_{attempt}.stdout.txt").write_text(out or "", encoding="utf-8")
@@ -810,60 +691,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 time.sleep(max(0, args.monkey_start_retry_s))
             else:
                 raise RuntimeError(f"monkey failed to stay alive after startup: {last_start_err}")
-    elif workload == "memstress":
-        workload_log_prefix = "memstress"
-        manifest["workload"]["config"] = {
-            "packages": memstress_pkgs,
-            "heavy_packages": memstress_heavy_pkgs,
-            "burst_size": args.memstress_burst_size,
-            "heavy_per_burst": args.memstress_heavy_per_burst,
-            "max_alive": args.memstress_max_alive,
-            "hold_ms": args.memstress_hold_ms,
-            "launch_gap_ms": args.memstress_launch_gap_ms,
-            "cycle_sleep_ms": args.memstress_cycle_sleep_ms,
-            "prefer_keywords": args.memstress_prefer_keywords,
-            "seed": args.memstress_seed,
-            "clear_logcat": args.clear_logcat,
-        }
-        (out_dir / "run_manifest.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        workload_proc = start_memstress(
-            skill_dir=skill_dir,
-            serial=serial,
-            out_dir=out_dir,
-            pkgs=memstress_pkgs,
-            heavy_pkgs=memstress_heavy_pkgs,
-            duration_s=max(1, args.duration_s),
-            burst_size=max(1, args.memstress_burst_size),
-            heavy_per_burst=max(0, args.memstress_heavy_per_burst),
-            max_alive=max(1, args.memstress_max_alive),
-            hold_ms=max(0, args.memstress_hold_ms),
-            launch_gap_ms=max(0, args.memstress_launch_gap_ms),
-            cycle_sleep_ms=max(0, args.memstress_cycle_sleep_ms),
-            prefer_keywords=args.memstress_prefer_keywords,
-            seed=args.memstress_seed,
-            clear_logcat=args.clear_logcat,
-        )
-        time.sleep(3)
-        rc = workload_proc.poll() if workload_proc else None
-        if rc is not None:
-            try:
-                out, err = workload_proc.communicate(timeout=5)
-            except Exception:
-                out, err = "", ""
-            (out_dir / "memstress_start_attempt_1.stdout.txt").write_text(out or "", encoding="utf-8")
-            (out_dir / "memstress_start_attempt_1.stderr.txt").write_text(err or "", encoding="utf-8")
-            raise RuntimeError(f"memstress failed to stay alive after startup: rc={rc}")
     else:
-        manifest["workload"]["config"] = {}
-        (out_dir / "run_manifest.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        workload_proc = None
-
-    manifest["workload"]["status"] = "running" if workload_proc else "disabled"
-    (out_dir / "run_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        monkey_proc = None
 
     # Sampling loop
     raw_csv = out_dir / "raw_samples.csv"
@@ -877,27 +706,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         out_csv=raw_csv,
         retries=max(0, args.sample_retries),
         retry_sleep_s=max(0, args.retry_sleep_s),
-        workload_proc=workload_proc,
+        monkey_proc=monkey_proc,
     )
 
-    # Wait workload to finish (best effort)
-    workload_rc: Optional[int] = None
-    if workload_proc:
+    # Wait monkey to finish (best effort)
+    if monkey_proc:
         try:
-            stdout, stderr = workload_proc.communicate(timeout=30)
+            stdout, stderr = monkey_proc.communicate(timeout=30)
         except subprocess.TimeoutExpired:
-            workload_proc.terminate()
-            try:
-                stdout, stderr = workload_proc.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
-                workload_proc.kill()
-                stdout, stderr = workload_proc.communicate(timeout=10)
-        workload_rc = workload_proc.returncode
-        (out_dir / f"{workload_log_prefix}_runner_stdout.txt").write_text(stdout or "", encoding="utf-8")
-        (out_dir / f"{workload_log_prefix}_runner_stderr.txt").write_text(stderr or "", encoding="utf-8")
+            monkey_proc.kill()
+            stdout, stderr = monkey_proc.communicate(timeout=10)
+        (out_dir / "monkey_runner_stdout.txt").write_text(stdout or "", encoding="utf-8")
+        (out_dir / "monkey_runner_stderr.txt").write_text(stderr or "", encoding="utf-8")
 
-        if workload == "monkey":
-            stop_monkey_best_effort(serial)
+        # If still running on device, stop it.
+        stop_monkey_best_effort(serial)
 
     # Derive
     run_derive(skill_dir, out_dir)
@@ -906,8 +729,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     manifest["end_host_ts"] = int(time.time())
     manifest["samples"] = n
     manifest["sample_errors"] = nerr
-    manifest["workload"]["status"] = "finished" if workload_proc else "disabled"
-    manifest["workload"]["runner_exit_code"] = workload_rc
     (out_dir / "run_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     print(f"Done. out_dir: {out_dir}")

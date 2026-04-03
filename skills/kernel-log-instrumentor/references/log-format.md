@@ -10,14 +10,15 @@ Put these in **every** log line:
 
 1. **Stable prefix/tag**: pick one short tag and keep it consistent.
    - Example: `KLOG` or `KLOG:<topic>`
-2. **Function name**: always print `__func__`.
+2. **Function name**: always print it as `fn=<__func__>`.
 3. **Key=value fields**: prefer `k=v` pairs over prose.
 
 Recommended minimum set:
 - `cpu=%d` (use `raw_smp_processor_id()`)
 - `pid=%d` (use `task_pid_nr(current)`)
 - `comm=%s` (use `current->comm`)
-- when debug fs code,always print `inode->i_ino`
+- when debugging fs code, always print `ino=%lu` from `inode->i_ino` when available
+- when correlating across many threads, always print at least one shared-object id such as `ino=`, `index=`, `folio=`, `nid=`, `req=`, or `seq=`
 ## Canonical line template
 
 Prefer this general shape:
@@ -45,19 +46,28 @@ When you need copy/paste-ready macros, generate one of these:
 
 /* Default: use pr_emerg */
 #define KLOGE(subtag, fmt, ...) \
-	pr_emerg(KLOG_TAG " " subtag " %s " fmt "\n", __func__, ##__VA_ARGS__)
+	pr_emerg(KLOG_TAG " " subtag " fn=%s " fmt "\n", __func__, ##__VA_ARGS__)
 
 /* If you must avoid immediate console flushing in atomic/locked context */
 #define KLOGE_DEFERRED(subtag, fmt, ...) \
-	printk_deferred(KERN_EMERG KLOG_TAG " " subtag " %s " fmt "\n", __func__, ##__VA_ARGS__)
+	printk_deferred(KERN_EMERG KLOG_TAG " " subtag " fn=%s " fmt "\n", __func__, ##__VA_ARGS__)
 ```
 
 Then structure arguments as key=value pairs:
 
 ```c
-KLOGE("STATE", "cpu=%d pid=%d comm=%s state=%d->%d", raw_smp_processor_id(),
-      task_pid_nr(current), current->comm, old_state, new_state);
+KLOGE("STATE", "cpu=%d pid=%d comm=%s ino=%lu state=%d->%d", raw_smp_processor_id(),
+      task_pid_nr(current), current->comm, inode->i_ino, old_state, new_state);
 ```
+
+## Treat logs as a table
+- Design each line so it can stand alone as one row in a table.
+- Prefer explicit identity columns over implicit context from nearby lines.
+- For shared-object investigations, print the same ids on every relevant line:
+  - actor ids: `pid`, `comm`, `cpu`
+  - object ids: `ino`, `index`, `folio`, `nid`, `bio`, `seq`, request id
+  - state columns: `state`, `flags`, `count`, `old->new`
+- This makes it possible to query the logs with `scripts/kernel_log_kv_query.py` instead of manually scanning prose.
 
 ## Pointers and ids
 - Prefer stable ids over raw pointers (e.g., `inode->i_ino`, `skb->hash`).

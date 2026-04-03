@@ -12,6 +12,12 @@
       "prompt": "为什么 `npx skills find` 和 `npm view` 这种读命令也会被拦？顺手把安装好的 skill 接到 Codex 里。",
       "expected_output": "The skill should explain network-disabled sandbox behavior, recommend stable prefix rules, and use the sync script when ~/.codex/skills is missing the installed skill.",
       "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "这几个 MCP 靠谱吗？给我一个能筛 install hook、native binary、child_process、0.0.0.0 监听的本地审计流程。",
+      "expected_output": "The skill should avoid absolute trust claims, audit the package on disk, and use the bundled audit script plus checklist to produce a risk-based conclusion.",
+      "files": []
     }
   ]
 }
