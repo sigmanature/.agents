@@ -2,6 +2,9 @@
 set -euo pipefail
 
 # Create a temporary debug branch for kernel logging changes.
+# Prefer git_temp_log_worktree.sh for learn_os-style work so the main checkout
+# stays untouched; keep this helper for the rare case where same-tree branch
+# switching is intentional.
 # Usage:
 #   ./git_temp_log_branch.sh <topic> [base_branch]
 # Example:

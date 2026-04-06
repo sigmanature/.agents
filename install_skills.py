@@ -8,12 +8,14 @@
   2. 卸载技能：删除已安装的技能及其软链接。
 
 用法：
-  python3 install_skill.py /path/to/skill_dir
-  python3 install_skill.py /path/to/skill_dir --scope project
-  python3 install_skill.py /path/to/skill_dir --scope user
-  python3 install_skill.py /path/to/skill_dir --force
-  python3 install_skill.py /path/to/skill_dir --uninstall
-  python3 install_skill.py "/path/to/skills/*"
+  python3 install_skills.py /path/to/skill_dir
+  python3 install_skills.py /path/to/skill_repo_root
+  python3 install_skills.py /path/to/skill_collection_dir
+  python3 install_skills.py /path/to/skill_dir --scope project
+  python3 install_skills.py /path/to/skill_dir --scope user
+  python3 install_skills.py /path/to/skill_dir --force
+  python3 install_skills.py /path/to/skill_dir --uninstall
+  python3 install_skills.py "/path/to/skills/*"
 """
 
 import argparse
@@ -70,10 +72,48 @@ def has_glob_chars(s: str) -> bool:
     return any(ch in s for ch in ["*", "?", "["])
 
 
+def has_skill_marker(skill_dir: Path) -> bool:
+    return (skill_dir / "SKILL.md").is_file() or (skill_dir / "skill.md").is_file()
+
+
+def discover_skill_collection(base: Path) -> list[Path]:
+    """
+    识别“skill 集合目录”：
+      - 仓库根目录下带有 skills/<skill>/SKILL.md
+      - 某目录下直接包含多个 <skill>/SKILL.md
+    返回：可安装的子 skill 列表；若不是集合目录则返回空列表。
+    """
+    if not base.exists() or not base.is_dir():
+        return []
+
+    search_roots = []
+    nested_skills = base / "skills"
+    if nested_skills.is_dir():
+        search_roots.append(nested_skills)
+    search_roots.append(base)
+
+    for root in search_roots:
+        members = []
+        try:
+            children = sorted(root.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            continue
+
+        for child in children:
+            if child.is_dir() and has_skill_marker(child):
+                members.append(child.resolve())
+
+        if members:
+            return members
+
+    return []
+
+
 def expand_skill_sources(raw: str) -> list[Path]:
     """
     支持：
       - 普通路径：/a/b/skill
+      - skill 集合目录：/a/b/repo_root 或 /a/b/skills
       - 通配符：/a/b/*（匹配多个目录）
     返回：已去重、排序后的目录 Path 列表
     """
@@ -92,7 +132,13 @@ def expand_skill_sources(raw: str) -> list[Path]:
                 uniq[str(p)] = p
         return sorted(uniq.values(), key=lambda x: x.name.lower())
     else:
-        return [Path(expanded).expanduser()]
+        base = Path(expanded).expanduser()
+        if base.is_dir() and not has_skill_marker(base):
+            members = discover_skill_collection(base)
+            if members:
+                print(f"[INFO] 检测到 skill 集合目录：{base} -> 自动展开 {len(members)} 个子 skill")
+                return members
+        return [base]
 
 
 def validate_skill_dir(skill_dir: Path) -> None:
@@ -104,15 +150,10 @@ def validate_skill_dir(skill_dir: Path) -> None:
     if not skill_dir.is_dir():
         raise ValueError(f"源路径不是目录：{skill_dir}")
 
-    p_upper = skill_dir / "SKILL.md"
-    p_lower = skill_dir / "skill.md"
-
-    if p_upper.is_file():
-        return
-
-    if p_lower.is_file():
-        # 兼容，但给个提示
-        print(f"[WARN] {skill_dir} 顶层没有 SKILL.md，但存在 skill.md（已兼容通过）")
+    if has_skill_marker(skill_dir):
+        if not (skill_dir / "SKILL.md").is_file():
+            # 兼容，但给个提示
+            print(f"[WARN] {skill_dir} 顶层没有 SKILL.md，但存在 skill.md（已兼容通过）")
         return
 
     raise FileNotFoundError(f"校验失败：{skill_dir} 顶层未找到 SKILL.md（或 skill.md）")

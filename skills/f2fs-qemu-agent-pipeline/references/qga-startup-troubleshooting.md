@@ -36,6 +36,19 @@ timeout 15 bash myscripts/qemu_start_ori.sh --log /tmp/qemu_probe.log
 ```
   - capture full stderr/stdout reason
 
+## Symptom: host-side `nohup ... < /dev/null &` backgrounding exits quickly
+
+- Typical signal:
+  - launcher returns quickly
+  - console log stays empty
+  - `/tmp/qga.sock` or `/tmp/qemu-qmp.sock` may appear briefly and then disappear
+  - `ps` no longer shows the real `qemu-system-aarch64`
+- Cause:
+  - backgrounding a foreground stdio-based launcher purely from the host shell is fragile because the VM still depends on a tty-shaped console backend
+- Action:
+  - rerun the launcher in a real PTY for diagnosis
+  - if you need a detached boot path, use a launcher that was designed for non-stdio startup rather than `nohup` around the interactive foreground path
+
 ## Symptom: socket exists but QGA `ConnectionRefusedError`
 
 - Means stale socket path or no active listener.
@@ -66,7 +79,7 @@ timeout 15 bash myscripts/qemu_start_ori.sh --log /tmp/qemu_probe.log
 ## Symptom: foreground boot works but background launch appears flaky
 
 - Action:
-  - keep one foreground PTY session for stabilization
+  - keep one foreground PTY session for stabilization by using `myscripts/qemu_start_ori.sh`
   - run guest setup, dynamic-debug enablement, and test orchestration through QGA in parallel host shells
   - once root cause identified, return to background mode
 

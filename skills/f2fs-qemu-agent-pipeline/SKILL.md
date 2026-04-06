@@ -43,6 +43,7 @@ When starting the VM:
 
 - Never run `myscripts/qemu_start_ori` in a way that blocks the chat session.
 - Always start QEMU in the background.
+- When using `myscripts/qemu_start_ori.sh` interactively in a PTY, prefer its explicit stdio multiplexer path with `signal=off` so host `Ctrl-C` does not kill the VM.
 - Preserve the caller's launch directory so `guest_console.log` remains in the directory from which the start command was issued.
 - Prefer a wrapper such as `.agents/tools/vm_start_bg.sh`.
 - After starting QEMU, immediately verify process status and whether SSH on the forwarded guest port is expected to come up.
