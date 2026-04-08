@@ -87,6 +87,9 @@ Load `references/adb_execution_reference.md` and follow its recommended patterns
 - `scripts/run_monkey_and_collect_logs.sh`
 - `scripts/stop_monkey_now.sh`
 - `scripts/adb_pkg.sh`
+- `scripts/lf_unaligned_rw_smoke.sh` (large-folio + encrypted dir unaligned R/W smoke test)
 - `scripts/adb_helpers.sh` (optional helpers for scripts; safe quoting patterns)
 - `references/adb_execution_reference.md`
 - `references/monkey_flags.md`
+- `references/pm_critical_packages_xml_einval.md` (PackageManager `packages.xml` `EINVAL` triage)
+- `references/large_folio_unaligned_rw_smoke.md` (how to run the unaligned R/W test)

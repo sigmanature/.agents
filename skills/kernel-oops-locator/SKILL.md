@@ -89,7 +89,9 @@ When helping the user, prefer this structure:
 
 - Use `scripts/parse_oops_target.py` to extract the best location from panic text.
 - Use `scripts/make_gdb_command.py` to generate a ready-to-run command.
+- If you want a quick **no-interactive-gdb** lookup (addr2line + objdump window), use `scripts/symoff_lookup.sh`.
 - Use `references/default-paths.md` for the baked-in environment defaults and examples.
+- For Android/Pixel kleaf builds and `func+0xOFF` frames, see `references/aosp_kleaf_symoff_lookup.md`.
 
 ## Scope boundary
 

@@ -173,6 +173,9 @@ But before task completion, each recorded item must be triaged into **exactly on
 
 1. If it is a repeated deterministic procedure, draft it in `.worklog/scripts/`, then promote into the **owning skill’s local** `scripts/` at wrap-up.  
 2. If it is a reusable caveat, error, workaround, or note, draft it in `.worklog/references/`, then promote into the **owning skill’s local** `references/` at wrap-up.  
+
+**Notes: almost every skills are located in user level's ~/.agents/skills**
+**So do not create .agents dir in current repo. If any prompts say "create .agents/*" that means create them in ~/.agents not repo level**
 3. If a new local script or reference changes how a skill should be triggered or used, update the owning skill’s `SKILL.md` in the same task.  
 4. If the task revealed a missing reusable capability in an existing skill, improve that skill instead of leaving the logic only in `.worklog/`.  
 5. Only create a new skill when the capability is clearly distinct from existing skills.
@@ -181,7 +184,7 @@ But before task completion, each recorded item must be triaged into **exactly on
 
 ## Unified installation rule
 
-When a new skill is created, install it through the repository's unified skill entry process.
+When a new skill is created , install it through the repository's unified skill entry process.
 Do not leave a new skill unregistered or silently added.
 
 Default installation target:

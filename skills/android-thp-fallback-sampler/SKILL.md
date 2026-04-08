@@ -11,7 +11,7 @@ description: automate long-running sampling of android anon 16KB large folio fal
 - adb 批量安装 APK wechat-wxapkg-and-apk-batch-tools skill
 
 并在测试期间按固定间隔采样：
-`/sys/kernel/mm/transparent_hugepage/hugepages-16KB/stats/*`
+`/sys/kernel/mm/transparent_hugepage/hugepages-16kB/stats/*`
 
 重点指标（建议主口径）：
 
@@ -51,19 +51,21 @@ python3 scripts/apk_batch_install.py ./apks --output-dir ./output/apk_install_ru
 ### 2) 跑“采样 + monkey”长测
 
 ```bash
-python3 scripts/run_experiment.py \
+python3 scripts/run_monkey.py \
+  --serial <SERIAL> \
   --duration-s 21600 \
   --interval-s 60 \
   --out-dir ./output/thp_run_001 \
-  --setup-shell "echo always > /sys/kernel/mm/transparent_hugepage/hugepages-16KB/enabled" \
-  --setup-shell "echo always > /sys/kernel/mm/transparent_hugepage/hugepages-16KB/anon" \
+  --thp-ensure-mode always \
+  --setup-shell "echo always > /sys/kernel/mm/transparent_hugepage/hugepages-16kB/anon" \
   --monkey global
 ```
 
 如果你要把 monkey 限制在某个 app：
 
 ```bash
-python3 scripts/run_experiment.py \
+python3 scripts/run_monkey.py \
+  --serial <SERIAL> \
   --duration-s 21600 \
   --interval-s 60 \
   --out-dir ./output/thp_run_002 \
@@ -76,20 +78,20 @@ python3 scripts/run_experiment.py \
 适用于更强调内存占用与快速切换的场景：每轮快速启动多 app，保留一部分存活，再 force-stop 更早的 app，持续制造 app 工作集变化。
 
 ```bash
-python3 scripts/run_experiment.py \
+python3 scripts/run_memstress_and_collect_logs.py \
+  --serial <SERIAL> \
   --duration-s 21600 \
   --interval-s 60 \
   --out-dir ./output/thp_memstress_001 \
-  --setup-shell "echo always > /sys/kernel/mm/transparent_hugepage/hugepages-16KB/enabled" \
-  --setup-shell "echo always > /sys/kernel/mm/transparent_hugepage/hugepages-16KB/anon" \
-  --workload memstress \
-  --memstress-package-file ./top100_packages.txt \
-  --memstress-heavy-package com.google.android.GoogleCamera \
-  --memstress-heavy-package com.google.android.apps.youtube.unplugged \
-  --memstress-burst-size 4 \
-  --memstress-heavy-per-burst 2 \
-  --memstress-max-alive 8 \
-  --memstress-hold-ms 5000
+  --thp-ensure-mode always \
+  --setup-shell "echo always > /sys/kernel/mm/transparent_hugepage/hugepages-16kB/anon" \
+  --package-file ./top100_packages.txt \
+  --heavy-package com.google.android.GoogleCamera \
+  --heavy-package com.google.android.apps.youtube.unplugged \
+  --burst-size 4 \
+  --heavy-per-burst 2 \
+  --max-alive 8 \
+  --hold-ms 5000
 ```
 
 ---
@@ -101,7 +103,7 @@ python3 scripts/run_experiment.py \
 - `raw_samples.csv`：每次采样的原始累计值（单调递增计数器）
 - `derived.csv`：每个采样窗口的 Δ 以及 `fallback_ratio`
 - `summary.md`：总体比率 + 简单趋势摘要
-- `monkey/`：`run_monkey_and_collect_logs.sh` 的产物（logcat、stdout/stderr、dumpsys 等）
+- `monkey/`：`run_monkey.py` 的产物（logcat、stdout/stderr、dumpsys 等）
 - `memstress/`：`run_memstress_and_collect_logs.py` 的产物（轮次日志、resolved activities、logcat、summary）
 - `run_manifest.json`：本次运行的参数、serial、起止时间
 
@@ -109,30 +111,74 @@ python3 scripts/run_experiment.py \
 
 ## 关键参数
 
-### run_experiment.py
+> 每个 `scripts/run_*.py` 顶部都有一个 `CONFIG` 常量区：默认参数以 `CONFIG` 为准；命令行参数用于按需覆盖。
+
+### run_monkey.py
 
 - `--serial <SERIAL>`：多设备时必填
 - `--duration-s <sec>`：总时长（默认 6h）
 - `--interval-s <sec>`：采样间隔（默认 60s）
 - `--stats-dir <path>`：stats 目录（默认 16KB stats）
-- `--use-su`：用 `su -c` 读 stats / 执行 setup（需要 root）
+- `--use-su/--no-use-su`：是否用 `su -c` 读 stats / 执行 setup（需要 root）
 - `--setup-shell <cmd>`：可重复，运行前执行（建议把开关设置放这）
 - `--apk-dir <dir>`：先批量安装该目录下的 `*.apk`
-- `--workload none|monkey|memstress`：选择 workload 后端；不传时按现有 monkey/memstress 参数自动推断
-- `--monkey none|global|package`
+- `--thp-ensure-mode <mode>`：通过 `<stats_dir_parent>/enabled` 确保模式（如 `always`；用 `none` 表示只检查不写）
+- `--no-thp-ensure`：跳过 enabled 检查/写入
+- `--monkey global|package`
 - `--monkey-package <pkg>`：`package` 模式必填
 - `--monkey-throttle-ms <ms>`：默认 75
 - `--monkey-events <n>`：不填会按 duration+throttle 估算
 - `--monkey-extra "<flags>"`：追加 monkey flags（原样拼接）
-- `--memstress-package <pkg>` / `--memstress-package-file <file>`：memstress 的目标 app 集合
-- `--memstress-heavy-package <pkg>`：显式标记重型 app，优先在每轮启动
-- `--memstress-burst-size <n>`：每轮快速启动多少个 app
-- `--memstress-heavy-per-burst <n>`：每轮尽量包含多少个 heavy app
-- `--memstress-max-alive <n>`：最多保留多少个已启动 app 存活，再开始 force-stop 更早的 app
-- `--memstress-hold-ms <ms>`：一轮启动后保持多久再清理
-- `--memstress-launch-gap-ms <ms>`：同一轮内相邻 app 启动间隔
-- `--memstress-cycle-sleep-ms <ms>`：轮与轮之间的停顿
-- `--memstress-prefer-keywords <csv>`：对 package 名中命中 `camera/video/gallery/player/...` 的 app 自动偏置
+
+### run_memstress_and_collect_logs.py
+
+- `--serial <SERIAL>`：多设备时必填
+- `--duration-s <sec>`：总时长（默认 6h）
+- `--interval-s <sec>`：采样间隔（默认 60s）
+- `--stats-dir <path>` / `--counters <csv>`：采样源与 counter 列表
+- `--use-su/--no-use-su`：是否用 `su -c` 读 stats / 执行 setup（需要 root）
+- `--setup-shell <cmd>`：可重复，运行前执行（建议把开关设置放这）
+- `--thp-ensure-mode <mode>` / `--no-thp-ensure`：同上
+- `--package <pkg>` / `--package-file <file>`：memstress 的目标 app 集合
+- `--heavy-package <pkg>` / `--heavy-package-file <file>`：显式标记重型 app，优先在每轮启动
+- `--burst-size <n>` / `--heavy-per-burst <n>`：每轮启动数量与 heavy 目标数
+- `--max-alive <n>` / `--hold-ms <ms>`：存活上限与 hold 时长
+- `--launch-gap-ms <ms>` / `--cycle-sleep-ms <ms>`：启动间隔与轮间隔
+- `--prefer-keywords <csv>`：关键词自动偏置（camera/video/...）
+
+---
+
+## 多设备并行（单进程）
+
+> 两个实验脚本都支持：一个进程内对多个设备并行跑（线程池并发）。
+
+常用两种方式：
+
+1) 手动指定多个 serial（可重复或逗号分隔）：
+
+```bash
+python3 scripts/run_monkey.py \
+  --serial SERIAL_A --serial SERIAL_B \
+  --jobs 2 \
+  --out-dir ./output/thp_monkey_fleet_001 \
+  --duration-s 21600 --interval-s 60 \
+  --monkey global
+```
+
+2) 自动跑所有在线设备：
+
+```bash
+python3 scripts/run_memstress_and_collect_logs.py \
+  --all-devices \
+  --jobs 4 \
+  --out-dir ./output/thp_memstress_fleet_001 \
+  --duration-s 21600 --interval-s 60 \
+  --package-file ./top100_packages.txt
+```
+
+输出目录约定：
+- 单设备：产物直接落在 `--out-dir`（或默认 `output/...`）目录下
+- 多设备：按 `--out-dir/<serial>/...` 分层隔离
 
 ---
 
@@ -150,10 +196,33 @@ python3 scripts/run_experiment.py \
 
 ## Bundled resources
 
-- `scripts/run_experiment.py`：一键跑采样 +（可选）安装 APK +（可选）monkey
+- `scripts/run_monkey.py`：跑采样 + monkey（logcat + monkey stdout/stderr + dumpsys）
+- `scripts/run_memstress_and_collect_logs.py`：跑采样 + memstress（logcat + cycle log + dumpsys）
+- `scripts/plot_derived_svg.py`：把 `derived.csv` 画成 `SVG`（无 matplotlib/pandas 依赖；支持多设备多曲线）
+
+### 绘图示例（无 matplotlib）
+
+单设备：
+
+```bash
+python3 scripts/plot_derived_svg.py ./output/thp_memstress_run_001/derived.csv --out-dir ./output/plot_run_001
+```
+
+双设备对比（同一 out_dir 下的两个 serial 子目录）：
+
+```bash
+python3 scripts/plot_derived_svg.py \
+  ./output/thp_memstress_fleet_001/<SERIAL_A>/derived.csv \
+  ./output/thp_memstress_fleet_001/<SERIAL_B>/derived.csv \
+  --align absolute \
+  --out-dir ./output/plot_fleet_001
+```
+- `scripts/run_experiment.py`：兼容 wrapper（deprecated）
 - `scripts/derive_metrics.py`：把 raw CSV 变成 derived+summary
-- `scripts/run_monkey_and_collect_logs.sh`：来自 android-adb-workflows
-- `scripts/run_memstress_and_collect_logs.py`：重内存 app 启停循环 workload
+- `scripts/compare_derived.py`：对比两个 `derived.csv`（有 matplotlib 时输出对比图）
 - `scripts/apk_batch_install.py`：来自 wechat-wxapkg-and-apk-batch-tools（批量安装逻辑请参阅该 skill 的 SKILL.md）
 - `scripts/adb_pkg.sh`, `scripts/adb_helpers.sh`
+- `scripts/utils/`：公共函数（adb/tty/su、设备亮屏解锁常亮、采样、THP ensure、out-dir/setup/install 工具函数）
 - `references/adb_execution_reference.md`, `references/monkey_flags.md`
+- `references/memstress_package_validation.md`：解释 memstress 为什么要校验/解析包名
+- `references/fleet_parallel.md`：解释单进程多设备并行与输出目录分层

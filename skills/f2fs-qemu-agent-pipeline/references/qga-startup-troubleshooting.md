@@ -7,7 +7,7 @@ Run in this exact order after start:
 
 1. Process check:
 ```bash
-ps -ef | grep -E 'qemu-system-aarch64|qemu_start_ori.sh' | grep -v grep
+ps -ef | grep -E 'qemu-system-aarch64|qemu_start_ori.sh|qemu_start_ubuntu.sh' | grep -v grep
 ```
 
 2. Socket check:
@@ -15,9 +15,12 @@ ps -ef | grep -E 'qemu-system-aarch64|qemu_start_ori.sh' | grep -v grep
 ls -l /tmp/qga.sock /tmp/qemu-qmp.sock
 ```
 
+For multi-instance mode, prefer reading socket paths from:
+`myscripts/vm_instances/<instance>/instance.env` (`VM_QGA_SOCK`, `VM_QMP_SOCK`).
+
 3. Handshake check:
 ```bash
-python3 scripts/qga_exec.py --timeout 15 'echo qga_ok && uname -a'
+python3 .agents/tools/qga_exec.py --timeout 15 --sock /tmp/qga.sock 'echo qga_ok && uname -a'
 ```
 
 Only when all three pass, treat VM as ready.
@@ -62,7 +65,7 @@ timeout 15 bash myscripts/qemu_start_ori.sh --log /tmp/qemu_probe.log
 - Typical signal:
   - background launcher printed only the config header
   - `ps` shows no `qemu-system-aarch64`
-  - `python3 scripts/qga_exec.py ...` fails with `FileNotFoundError: [Errno 2] No such file or directory`
+  - `python3 .agents/tools/qga_exec.py ...` fails with `FileNotFoundError: [Errno 2] No such file or directory`
 - Action:
   - classify it as the same false-positive startup family
   - do not trust wrapper exit status by itself

@@ -1,6 +1,6 @@
 ---
 name: f2fs-qemu-agent-pipeline
-description: orchestrate safe and reproducible f2fs or qemu work inside a learn_os style kernel workspace. use when chatgpt needs to source .vars.sh, start qemu without blocking, validate kernel builds, run guest commands, run guest test scripts, verify f2fs/mounts, and collect logs with evidence. default to ssh when available, but if ssh is unavailable, blocked by the sandbox, or the user explicitly requests qemu guest agent execution, use the skill-local `scripts/qga_exec.py` as the primary guest command runner.
+description: orchestrate safe and reproducible f2fs or qemu work inside a learn_os style kernel workspace. use when chatgpt needs to source .vars.sh, start qemu without blocking, validate kernel builds, run guest commands, run guest test scripts, verify f2fs/mounts, and collect logs with evidence. default to ssh when available, but if ssh is unavailable/blocked or the user explicitly requests qemu guest agent execution, use `.agents/tools/qga_exec.py` as the primary guest command runner.
 ---
 
 # f2fs / qemu agent pipeline
@@ -34,18 +34,24 @@ set +a
 
 ### Directory structure introduction
 - `$TEST`  refer to `myscripts/shared_with_qemu/test`has all test script that should run in vm instance.
-- `$SCRIPT` refer to `myscripts`has `qemu_start_ori.sh` has `shared_with_qemu` which are shared directory by host and guest using 9pfs.
-- `$SCRIPT/guest_console.log` record all guest-side real time log.You should try hard to grep/analyze it.Notice that it is real time log. It changes very fast.You should use wise method to grep/analyze it.
+- `$SCRIPT` refer to `myscripts` has QEMU launchers:
+  - legacy single-VM: `qemu_start_ori.sh` (deprecated for new work)
+  - multi-instance CoW: `qemu_start_ubuntu.sh` (preferred)
+- `myscripts/vm_instances/<instance>/instance.env` is the per-VM source of truth for: ssh/http/gdb port, QGA/QMP socket, pidfile, console log.
+- `guest_console.log` is real time log and changes fast. Prefer targeted `rg` patterns and/or `tail -n` when analyzing.
 
 ## QEMU start policy
 
 When starting the VM:
 
-- Never run `myscripts/qemu_start_ori` in a way that blocks the chat session.
-- Always start QEMU in the background.
+- Prefer multi-instance mode for anything that may need parallelism or isolation:
+  - launcher: `myscripts/qemu_start_ubuntu.sh start vm<N>`
+  - wrapper: `bash .agents/tools/vm_start_bg.sh --launcher ubuntu-cow --instance vm<N> ...`
+- Treat `myscripts/qemu_start_ori.sh` as legacy/diagnosis-only for new work. Do not build new automation on top of fixed `/tmp/qga.sock` + fixed `5022`.
+- Never run a launcher in a way that blocks the chat session; start QEMU in the background for automation.
 - When using `myscripts/qemu_start_ori.sh` interactively in a PTY, prefer its explicit stdio multiplexer path with `signal=off` so host `Ctrl-C` does not kill the VM.
 - Preserve the caller's launch directory so `guest_console.log` remains in the directory from which the start command was issued.
-- Prefer a wrapper such as `.agents/tools/vm_start_bg.sh`.
+- Prefer wrappers under `.agents/tools/` instead of ad-hoc `nohup` calls.
 - After starting QEMU, immediately verify process status and whether SSH on the forwarded guest port is expected to come up.
 - Verify the real QEMU process list with `ps aux | grep qemu` or an equivalent process inspection, not only with port checks.
 - If the launcher log shows a host-forwarding error such as `Could not set up host forwarding rule`, treat that as a strong signal that another QEMU instance may already be holding the forwarded port.
@@ -54,30 +60,32 @@ When starting the VM:
 - Treat `vm_start_bg.sh`'s printed PID as **wrapper PID**, not proof that `qemu-system-aarch64` is alive.
 - Always perform a post-start handshake:
   1. `ps` check for `qemu-system-aarch64`
-  2. socket check for `/tmp/qga.sock` and `/tmp/qemu-qmp.sock`
-  3. real QGA probe: `python3 scripts/qga_exec.py 'echo qga_ok'`
+  2. instance socket check (read from `instance.env` when using multi-instance mode)
+  3. real QGA probe with explicit socket: `python3 .agents/tools/qga_exec.py --sock <qga_sock> 'echo qga_ok'`
 
 Default execution pattern:
 
 1. Source `.vars.sh`.
-2. Run the background wrapper instead of calling `myscripts/qemu_start_ori` directly.
+2. Start VM in background:
+   - preferred: `bash .agents/tools/vm_start_bg.sh --launcher ubuntu-cow --instance vm2`
+   - legacy: `bash .agents/tools/vm_start_bg.sh` (starts `qemu_start_ori.sh`)
 3. Check that the QEMU process is actually alive with `ps aux | grep qemu` or equivalent process inspection.
-4. If launch logs contain host-forward setup failures, directly reuse the existing QEMU instance.
+4. If launch logs contain host-forward setup failures, directly reuse the existing QEMU instance (do not claim the new one succeeded).
 
-Note: the guest can be controlled either via **SSH** (when available) or via **QEMU Guest Agent (QGA)** using `scripts/qga_exec.py` (when SSH is unavailable/blocked or the user requests QGA).
+Note: the guest can be controlled either via **SSH** (when available) or via **QEMU Guest Agent (QGA)** using `.agents/tools/qga_exec.py` (when SSH is unavailable/blocked or the user requests QGA).
 
 ### QGA-first start runbook (mandatory when QGA is required)
 
 Use this ordered flow. Do not skip verification steps.
 
 1. Source `.vars.sh`.
-2. Start VM in background with `scripts/vm_start_bg.sh` (or equivalent wrapper).
+2. Start VM in background with `.agents/tools/vm_start_bg.sh` (or equivalent wrapper).
 3. Verify `qemu-system-aarch64` exists in process list.
-4. Verify sockets exist:
-   - `/tmp/qga.sock`
-   - `/tmp/qemu-qmp.sock`
+4. Verify sockets exist.
+   - legacy: `/tmp/qga.sock`, `/tmp/qemu-qmp.sock`
+   - multi-instance: read paths from `myscripts/vm_instances/<instance>/instance.env` (`VM_QGA_SOCK`, `VM_QMP_SOCK`)
 5. Verify QGA handshake succeeds with a real command:
-  - `python3 scripts/qga_exec.py 'echo qga_ok && uname -a'`
+  - `python3 .agents/tools/qga_exec.py --sock <qga_sock> 'echo qga_ok && uname -a'`
 6. If handshake succeeds, continue with test execution.
 
 ### QGA startup failure modes observed in real runs
@@ -99,9 +107,24 @@ Treat the following as first-class, reusable troubleshooting knowledge:
 - **Foreground works but background appears flaky**
   - Action: use foreground `qemu_start_ori.sh` in PTY as diagnosis mode, then switch back to verified background mode after root cause is clear.
 
-When the user explicitly forbids SSH, keep guest command execution on QGA only after startup. It is acceptable to keep QEMU itself attached to a PTY for host-side liveness while all guest-side setup and test commands go through `scripts/qga_exec.py`.
+When the user explicitly forbids SSH, keep guest command execution on QGA only after startup. It is acceptable to keep QEMU itself attached to a PTY for host-side liveness while all guest-side setup and test commands go through `.agents/tools/qga_exec.py`.
 
 Detailed troubleshooting checklist: [`references/qga-startup-troubleshooting.md`](references/qga-startup-troubleshooting.md)
+
+## Multi-instance safety rules (parallel mode)
+
+When multiple VMs may be running at the same time, apply these rules to avoid controlling the wrong VM:
+
+- **Never** rely on "first match" `ps | grep qemu` behaviors. Require an explicit instance.
+- For QGA: always use `python3 .agents/tools/qga_exec.py --sock <VM_QGA_SOCK> '<cmd>'` (or set `QGA_SOCK=<VM_QGA_SOCK>`).
+- For SSH: use `bash .agents/tools/vm_ssh.sh --instance vm2 '<cmd>'` so the port comes from `instance.env`.
+- For stop: use `bash .agents/tools/vm_stop.sh normal --instance vm2`.
+
+Shared directory note:
+
+- The safe default is per-instance `myscripts/vm_instances/<instance>/shared_with_qemu` (isolates concurrent writes).
+- "One shared copy of scripts" is possible, but it requires separating read-only scripts from per-instance writable outputs.
+  Reference: [`references/qemu-cow-multi-instance.md`](references/qemu-cow-multi-instance.md)
 
 ## QEMU stop policy
 
@@ -151,27 +174,29 @@ Important constraints:
 This workspace supports two control planes for running commands inside the VM:
 
 - **SSH (default when available)**: best for interactive-ish workflows and bulk file movement.
-- **QEMU Guest Agent (QGA) via `scripts/qga_exec.py` (preferred when SSH is unavailable/blocked or when the user explicitly requests it)**.
+- **QEMU Guest Agent (QGA) via `.agents/tools/qga_exec.py` (preferred when SSH is unavailable/blocked or when the user explicitly requests it)**.
 
-Treat **`scripts/qga_exec.py` as a high-level tool**: use it instead of ad-hoc `socat`/raw QGA JSON whenever the task is “run a command/script inside the guest”.
+Treat **`.agents/tools/qga_exec.py` as a high-level tool**: use it instead of ad-hoc `socat`/raw QGA JSON whenever the task is “run a command/script inside the guest”.
 
 ### Decision rule (SSH vs QGA)
 
-Use **QGA (`scripts/qga_exec.py`)** if any of these are true:
+Use **QGA (`.agents/tools/qga_exec.py`)** if any of these are true:
 
 - The user says **SSH is unavailable**, broken, blocked, or intentionally not used.
 - The user explicitly requests **`qga_exec.py`** or “QGA execute”.
 - The guest has no network / no forwarded port, but QGA is up.
 
-Otherwise, use **SSH** via `scripts/vm_ssh.sh`.
+Otherwise, use **SSH** via `.agents/tools/vm_ssh.sh`.
 
 ### QGA execution policy (when selected)
 
-1. Verify host-side QGA socket exists and is reachable (typically `/tmp/qga.sock`).
+1. Verify host-side QGA socket exists and is reachable.
+   - legacy default: `/tmp/qga.sock`
+   - multi-instance: the value in `instance.env` (`VM_QGA_SOCK`)
 2. Run guest commands via:
 
 ```bash
-python3 scripts/qga_exec.py '<guest command>'
+python3 .agents/tools/qga_exec.py --sock /tmp/qga.sock '<guest command>'
 ```
 
 3. For long-running tests or noisy output, do not stream unlimited stdout back through QGA. Prefer:
@@ -183,7 +208,7 @@ python3 scripts/qga_exec.py '<guest command>'
 ### SSH execution policy (when selected)
 
 - For non-interactive guest operations, prefer SSH command injection instead of opening an interactive terminal.
-- Prefer a wrapper such as `scripts/vm_ssh.sh`.
+- Prefer a wrapper such as `.agents/tools/vm_ssh.sh`.
 - Before the first SSH action of a fresh boot, verify the guest is reachable and ready.
 - Prefer key-based SSH when it is configured.
 - If key-based SSH is not configured, explain the concrete blocker and the smallest next step.
@@ -201,21 +226,21 @@ Recommended order:
 
 ## Script entrypoints and references
 
-When these scripts are available under this skill's `scripts/`, prefer them over ad-hoc command reconstruction.
+When these scripts are available under this skill's `scripts/` directory, prefer them over ad-hoc command reconstruction. In this workspace, the absolute path is under `/home/nzzhao/.agents/skills/f2fs-qemu-agent-pipeline/scripts/`.
 
-- `scripts/vm_start_bg.sh`:
+- `.agents/tools/vm_start_bg.sh`:
   reference: [`references/script-vm_start_bg.md`](references/script-vm_start_bg.md)
-- `scripts/qga_exec.py`:
+- `.agents/tools/qga_exec.py`:
   reference: [`references/script-qga_exec.md`](references/script-qga_exec.md)
-- `scripts/vm_stop.sh`:
+- `.agents/tools/vm_stop.sh`:
   reference: [`references/script-vm_stop.md`](references/script-vm_stop.md)
-- `scripts/vm_ssh.sh`:
+- `.agents/tools/vm_ssh.sh`:
   reference: [`references/script-vm_ssh.md`](references/script-vm_ssh.md)
-- `scripts/vm_enable_dyn_debug.sh`:
+- `/home/nzzhao/.agents/skills/f2fs-qemu-agent-pipeline/scripts/vm_enable_dyn_debug.sh`:
   reference: [`references/script-vm_enable_dyn_debug.md`](references/script-vm_enable_dyn_debug.md)
-- `scripts/vm_hunt_trunc_write_delete.sh`:
+- `/home/nzzhao/.agents/skills/f2fs-qemu-agent-pipeline/scripts/vm_hunt_trunc_write_delete.sh`:
   reference: [`references/script-vm_hunt_trunc_write_delete.md`](references/script-vm_hunt_trunc_write_delete.md)
-- `scripts/vm_hunt_rwtest_deadlock_watch.sh`:
+- `/home/nzzhao/.agents/skills/f2fs-qemu-agent-pipeline/scripts/vm_hunt_rwtest_deadlock_watch.sh`:
   reference: [`references/script-vm_hunt_rwtest_deadlock_watch.md`](references/script-vm_hunt_rwtest_deadlock_watch.md)
 
 Rule: if script behavior and SKILL prose differ, update both SKILL and references together in the same change set.
@@ -267,7 +292,7 @@ When the task is about F2FS behavior, mount behavior, on-disk effects, regressio
 
 When debugging guest-side page-cache, mmap, readahead, or writeback behavior:
 
-- Prefer running guest commands through [`scripts/vm_ssh.sh`](scripts/vm_ssh.sh) with one wrapped remote command block instead of many ad hoc SSH calls.
+- Prefer running guest commands through [`.agents/tools/vm_ssh.sh`](.agents/tools/vm_ssh.sh) with one wrapped remote command block instead of many ad hoc SSH calls.
 - Prefer clearing and enabling only the needed tracepoints in `tracefs`, then running the reproduction, then filtering the captured trace before reporting.
 - If the bug is inode-specific, always collect the guest file inode with `stat`, convert the decimal inode to hex, and filter trace output by the hex inode because trace events such as `mm_filemap_fault` and `mm_filemap_add_to_page_cache` print inode values in hex.
 - Do not rely on `tail` of the whole trace buffer when the task is about a specific file; inode-filtered extraction is the default.
@@ -324,7 +349,7 @@ Before saying the task is done, verify the relevant facts actually happened:
 
 - “帮我在 learn_os 里把 qemu 起起来，但不要卡住对话。”
 - “用ssh操作虚拟机,发送命令和调试”
-- “ssh 不可用/不想用 ssh，用 scripts/qga_exec.py 在虚拟机里执行命令或跑测试脚本。”
+- “ssh 不可用/不想用 ssh，用 `.agents/tools/qga_exec.py` 在虚拟机里执行命令或跑测试脚本。”
 - “先检查这次改动涉及的 f2fs `.c` 文件能不能单独编，再跑整镜像编译。”
 - “进 guest 看一下共享目录有没有挂上，顺便跑个非交互命令。”
 - “这个 F2FS 改动不要只看代码，帮我进 qemu 做一个可复现验证。”
@@ -339,6 +364,8 @@ When running `rw_matrix.sh` (or similar tests that assume an encrypted target di
 2. Always verify both:
    - `fscrypt status <ENC_DIR>` reports `is encrypted with fscrypt`, and
    - `lsattr -d <ENC_DIR>` contains `E` flag.
+   - Note: `lsattr`'s `I` flag on F2FS is about inline data / inline dentry, **not** blk inline encryption.
+     Reference: [`references/fscrypt-inlinecrypt-vs-lsattr.md`](references/fscrypt-inlinecrypt-vs-lsattr.md)
 3. If filesystem has policy/protector but `ENC_DIR` is not encrypted, rebuild the directory:
    - backup/move old plain directory,
    - recreate empty directory,
@@ -347,6 +374,11 @@ When running `rw_matrix.sh` (or similar tests that assume an encrypted target di
 4. Confirm newly created files under `ENC_DIR` also show encryption (`lsattr <file>` has `E` or `fscrypt status <file>` shows encrypted).
 5. For long runs via QGA, redirect script output to a guest log file and tail it separately; QGA command timeout does not imply script failure.
 6. If the run stalls or fails, immediately inspect `guest_console.log` for `Oops`, `BUG`, `Call trace`, `panic`, and include the first failing stack in report.
+
+Quick smoke test (inlinecrypt + fscrypt + persistence):
+
+- Guest path: `/root/shared_with_host/test/case/test_fscrypt_inlinecrypt_medium_persist.py`
+- Run (QGA): `python3 .agents/tools/qga_exec.py --timeout 600 'python3 /root/shared_with_host/test/case/test_fscrypt_inlinecrypt_medium_persist.py'`
 
 Recommended minimal preflight command block in guest:
 

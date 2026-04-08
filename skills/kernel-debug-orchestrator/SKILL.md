@@ -118,6 +118,10 @@ Classify and act:
 
 - `insufficient signal`: add/refine logs and repeat from Step 2.
 - `clear root-cause candidate`: propose fix patch and validate with same repro.
+
+## References
+
+- [/home/nzzhao/.agents/skills/kernel-debug-orchestrator/references/f2fs-largefolio-gc-porting-playbook.md](/home/nzzhao/.agents/skills/kernel-debug-orchestrator/references/f2fs-largefolio-gc-porting-playbook.md)
 - `non-deterministic`: tighten repro and add ordering/state logs.
 
 Keep each iteration bounded; avoid broad logging expansion without evidence.

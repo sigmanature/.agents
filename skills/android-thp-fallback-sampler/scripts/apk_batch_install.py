@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -68,9 +69,49 @@ def list_apks(apk_dir: Path) -> List[Path]:
     return apks
 
 
+_PKG_RE = re.compile(r"([a-zA-Z0-9_]+(?:\\.[a-zA-Z0-9_]+)+)")
+
+
+def _guess_pkg_from_filename(apk_path: Path) -> Optional[str]:
+    m = _PKG_RE.search(apk_path.name)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _guess_pkg_with_aapt(apk_path: Path) -> Optional[str]:
+    # Best-effort: parse manifest via aapt/aapt2 if available.
+    for tool in ("aapt2", "aapt"):
+        try:
+            cp = subprocess.run([tool, "dump", "badging", str(apk_path)], capture_output=True, text=True, timeout=30)
+        except FileNotFoundError:
+            continue
+        except subprocess.TimeoutExpired:
+            continue
+        if cp.returncode != 0:
+            continue
+        # Example: package: name='com.example.app' versionCode='...' versionName='...'
+        m = re.search(r"package:\\s+name='([^']+)'", cp.stdout or "")
+        if m:
+            return m.group(1).strip()
+    return None
+
+
 def infer_package_name(apk_path: Path) -> str:
     # Fallback: infer from filename. Only used if pm diff is unavailable.
     return apk_path.name[: -len(".apk")] if apk_path.name.lower().endswith(".apk") else apk_path.stem
+
+
+def resolve_apk_package_name(apk_path: Path) -> Optional[str]:
+    """Try to resolve real package name for an APK without installing it.
+
+    Used to skip installs for packages already present on the device.
+    """
+
+    pkg = _guess_pkg_from_filename(apk_path)
+    if pkg:
+        return pkg
+    return _guess_pkg_with_aapt(apk_path)
 
 
 def pm_list_packages(serial: str) -> set:
@@ -87,6 +128,49 @@ def pm_list_packages(serial: str) -> set:
     return pkgs
 
 
+def service_check(serial: str, name: str) -> bool:
+    """Best-effort check whether an Android binder service exists."""
+    cp = subprocess.run(
+        ["adb", "-s", serial, "shell", "service", "check", name],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    out = ((cp.stdout or "") + "\n" + (cp.stderr or "")).lower()
+    return "found" in out
+
+
+def wait_for_services(serial: str, *, timeout_s: int = 60, sleep_s: float = 2.0) -> bool:
+    """Wait until core services needed by `adb install` are available."""
+    deadline = time.time() + max(1, int(timeout_s))
+    while time.time() < deadline:
+        try:
+            if service_check(serial, "package") and service_check(serial, "mount"):
+                return True
+        except Exception:
+            pass
+        time.sleep(max(0.2, float(sleep_s)))
+    return False
+
+
+def is_transient_install_error(text: str) -> bool:
+    t = (text or "").lower()
+    if not t:
+        return False
+    # Observed during large batch installs if system_server / services are restarting.
+    markers = [
+        "can't find service: package",
+        "failure calling service package",
+        "broken pipe",
+        "device offline",
+        # Observed NPE in PackageManagerShellCommand on some builds when StorageManager is not ready.
+        "nullpointerexception",
+        "installlocationutils",
+        "storagemanager.getvolumes",
+    ]
+    return any(m in t for m in markers)
+
+
 @dataclass
 class InstallRecord:
     serial: str
@@ -97,42 +181,89 @@ class InstallRecord:
     stdout: str
     stderr: str
     elapsed_ms: int
+    attempts: int = 1
 
 
-def install_one(serial: str, apk_path: Path, timeout_s: int) -> InstallRecord:
+def install_one(serial: str, apk_path: Path, timeout_s: int, *, retries: int, retry_sleep_s: float) -> InstallRecord:
     t0 = time.time()
     pkg = infer_package_name(apk_path)
 
-    try:
-        cp = subprocess.run(
-            ["adb", "-s", serial, "install", "-r", str(apk_path)],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-        )
-        ok = (cp.returncode == 0) and ("Success" in (cp.stdout + cp.stderr))
-        return InstallRecord(
-            serial=serial,
-            apk=apk_path.name,
-            package_name=pkg,
-            ok=ok,
-            returncode=cp.returncode,
-            stdout=cp.stdout.strip(),
-            stderr=cp.stderr.strip(),
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    except subprocess.TimeoutExpired as e:
+    last: Optional[subprocess.CompletedProcess] = None
+    attempts = 0
+
+    for attempt in range(1, max(1, int(retries) + 1) + 1):
+        attempts = attempt
+        try:
+            cp = subprocess.run(
+                ["adb", "-s", serial, "install", "-r", str(apk_path)],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+            last = cp
+            ok = (cp.returncode == 0) and ("Success" in (cp.stdout + cp.stderr))
+            if ok:
+                return InstallRecord(
+                    serial=serial,
+                    apk=apk_path.name,
+                    package_name=pkg,
+                    ok=True,
+                    returncode=cp.returncode,
+                    stdout=cp.stdout.strip(),
+                    stderr=cp.stderr.strip(),
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                    attempts=attempts,
+                )
+
+            combined = (cp.stdout or "") + "\n" + (cp.stderr or "")
+            if attempt <= int(retries) and is_transient_install_error(combined):
+                wait_for_services(serial, timeout_s=60, sleep_s=2.0)
+                time.sleep(max(0.5, float(retry_sleep_s)))
+                continue
+            break
+        except subprocess.TimeoutExpired as e:
+            out = (e.stdout.decode("utf-8", "ignore") if isinstance(e.stdout, bytes) else (e.stdout or "")).strip()
+            err = (e.stderr.decode("utf-8", "ignore") if isinstance(e.stderr, bytes) else (e.stderr or "")).strip()
+            combined = out + "\n" + err
+            if attempt <= int(retries) and is_transient_install_error(combined):
+                wait_for_services(serial, timeout_s=60, sleep_s=2.0)
+                time.sleep(max(0.5, float(retry_sleep_s)))
+                continue
+            return InstallRecord(
+                serial=serial,
+                apk=apk_path.name,
+                package_name=pkg,
+                ok=False,
+                returncode=124,
+                stdout=out,
+                stderr=err or f"timeout after {timeout_s}s",
+                elapsed_ms=int((time.time() - t0) * 1000),
+                attempts=attempts,
+            )
+
+    if last is None:
         return InstallRecord(
             serial=serial,
             apk=apk_path.name,
             package_name=pkg,
             ok=False,
-            returncode=124,
-            stdout=(e.stdout.decode("utf-8", "ignore").strip() if isinstance(e.stdout, bytes) else (e.stdout or "").strip()),
-            stderr=(e.stderr.decode("utf-8", "ignore").strip() if isinstance(e.stderr, bytes) else (e.stderr or "").strip())
-            or f"timeout after {timeout_s}s",
+            returncode=1,
+            stdout="",
+            stderr="install failed (no subprocess result)",
             elapsed_ms=int((time.time() - t0) * 1000),
+            attempts=attempts or 1,
         )
+    return InstallRecord(
+        serial=serial,
+        apk=apk_path.name,
+        package_name=pkg,
+        ok=False,
+        returncode=last.returncode,
+        stdout=(last.stdout or "").strip(),
+        stderr=(last.stderr or "").strip(),
+        elapsed_ms=int((time.time() - t0) * 1000),
+        attempts=attempts or 1,
+    )
 
 
 def write_jsonl(path: Path, rows: List[dict]) -> None:
@@ -156,6 +287,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Output directory. Default: output/apk_install_<timestamp>/",
     )
     p.add_argument("--timeout", type=int, default=180, help="adb install timeout seconds")
+    p.add_argument(
+        "--skip-installed",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip installing APKs whose package name already exists on the device (best-effort).",
+    )
+    p.add_argument("--retries", type=int, default=2, help="Retry count for transient install failures (default: 2)")
+    p.add_argument("--retry-sleep", type=float, default=3.0, help="Seconds between install retries (default: 3.0)")
+    p.add_argument("--gap-s", type=float, default=0.0, help="Sleep seconds between APK installs (default: 0.0)")
 
     args = p.parse_args(argv)
 
@@ -184,19 +324,46 @@ def main(argv: Optional[List[str]] = None) -> int:
     for serial in serials:
         print(f"[{serial}] Snapshotting installed packages (before)...")
         pkgs_before[serial] = pm_list_packages(serial)
+        # Some devices/services may still be coming up; wait a bit for stability.
+        wait_for_services(serial, timeout_s=120, sleep_s=2.0)
 
     # Track per-apk per-device success
     by_apk: Dict[str, Dict[str, bool]] = {}
 
     for apk in apks:
+        resolved_pkg = resolve_apk_package_name(apk) if args.skip_installed else None
         by_apk.setdefault(apk.name, {})
         print(f"Installing: {apk.name}")
         for serial in serials:
-            r = install_one(serial, apk, timeout_s=args.timeout)
+            if args.skip_installed and resolved_pkg and (resolved_pkg in pkgs_before.get(serial, set())):
+                r = InstallRecord(
+                    serial=serial,
+                    apk=apk.name,
+                    package_name=resolved_pkg,
+                    ok=True,
+                    returncode=0,
+                    stdout="SKIP (already installed)",
+                    stderr="",
+                    elapsed_ms=0,
+                )
+                records.append(r)
+                by_apk[apk.name][serial] = True
+                print(f"  [{serial}] SKIP package={resolved_pkg} (already installed)")
+                continue
+
+            r = install_one(
+                serial,
+                apk,
+                timeout_s=int(args.timeout),
+                retries=int(args.retries),
+                retry_sleep_s=float(args.retry_sleep),
+            )
             records.append(r)
             by_apk[apk.name][serial] = r.ok
             status = "OK" if r.ok else "FAIL"
             print(f"  [{serial}] {status} rc={r.returncode} {r.stderr or r.stdout}")
+            if float(args.gap_s) > 0:
+                time.sleep(max(0.0, float(args.gap_s)))
 
     write_jsonl(log_path, [asdict(r) for r in records])
 
@@ -218,7 +385,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         ok_all = all(by_apk.get(apk.name, {}).get(s, False) for s in serials)
         if ok_all:
             # Find the real package name from the pm diff; fall back to filename inference
-            inferred = infer_package_name(apk)
+            inferred = (resolve_apk_package_name(apk) or infer_package_name(apk))
             # Try to match against new packages: prefer exact match on inferred name,
             # then any new pkg that contains the stem (best-effort for renamed apks)
             if inferred in new_pkgs_union:

@@ -2,16 +2,17 @@
 import argparse
 import base64
 import json
+import os
 import socket
 import sys
 import time
 
-SOCK = "/tmp/qga.sock"
+DEFAULT_SOCK = "/tmp/qga.sock"
 
 
-def qga_call(obj):
+def qga_call(obj, sock_path):
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.connect(SOCK)
+    s.connect(sock_path)
     s.sendall((json.dumps(obj) + "\n").encode())
     data = b""
     # Read one JSON line (QGA is typically request/response)
@@ -24,7 +25,7 @@ def qga_call(obj):
     return json.loads(data.decode().strip())
 
 
-def exec_in_vm(cmd, poll_interval=0.1, timeout=30, capture_output=True):
+def exec_in_vm(cmd, sock_path, poll_interval=0.1, timeout=30, capture_output=True):
     r = qga_call(
         {
             "execute": "guest-exec",
@@ -34,12 +35,14 @@ def exec_in_vm(cmd, poll_interval=0.1, timeout=30, capture_output=True):
                 "capture-output": bool(capture_output),
             },
         }
+        ,
+        sock_path,
     )
     pid = r["return"]["pid"]
 
     deadline = time.time() + timeout
     while True:
-        st = qga_call({"execute": "guest-exec-status", "arguments": {"pid": pid}})
+        st = qga_call({"execute": "guest-exec-status", "arguments": {"pid": pid}}, sock_path)
         ret = st["return"]
         if ret.get("exited"):
             out_b64 = ret.get("out-data", "")
@@ -54,6 +57,11 @@ def exec_in_vm(cmd, poll_interval=0.1, timeout=30, capture_output=True):
 
 def main(argv):
     p = argparse.ArgumentParser(description="Execute a command in the QEMU guest via QGA")
+    p.add_argument(
+        "--sock",
+        default=os.environ.get("QGA_SOCK", DEFAULT_SOCK),
+        help=f"QGA unix socket path (default: env QGA_SOCK or {DEFAULT_SOCK})",
+    )
     p.add_argument("--timeout", type=float, default=30.0, help="Seconds to wait for command completion")
     p.add_argument("--poll", type=float, default=0.1, help="Polling interval in seconds")
     p.add_argument(
@@ -67,6 +75,7 @@ def main(argv):
     cmd = " ".join(ns.cmd).strip() if ns.cmd else "id; uname -a"
     code, out, err = exec_in_vm(
         cmd,
+        sock_path=ns.sock,
         poll_interval=ns.poll,
         timeout=ns.timeout,
         capture_output=(not ns.no_capture),

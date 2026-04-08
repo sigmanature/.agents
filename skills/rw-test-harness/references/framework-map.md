@@ -10,19 +10,62 @@
 - `rw_test.py`
   - canonical provider for buffered-I/O and mmap test execution
   - owns:
-    - byte parsing
-    - pattern generation
     - baseline preparation
-    - full-file overlay verification
     - builtin buffered matrix
     - builtin mmap case registry
     - `case`, `matrix`, `mmap-case`, `mmap-matrix` subcommands
+
+- `utils/patterns.py`
+  - reusable byte-size parsing and expected-pattern generation helpers
+  - owns:
+    - `PatternConfig`
+    - `parse_bytes()`
+    - `render_pattern_bytes()`
+    - `generate_expected_direct()`
+
+- `utils/verify.py`
+  - reusable readback and disk-verify helpers shared by provider and GC runners
+  - owns:
+    - `hex_dump()`
+    - `verify_stream()`
+    - `verify_full_overlay()`
+    - `fill_largefolio_pattern()`
+
+- `utils/io.py`
+  - reusable low-level I/O helpers
+  - now also owns:
+    - `read_fd_discard()`
+    - `read_region_discard()`
+
+- `utils/sysutil.py`
+  - reusable system-side helpers
+  - now also owns:
+    - `drop_caches()`
+    - `best_effort_drop_caches()`
 
 - `rw_matrix.sh`
   - plain + encrypted buffered-I/O wrapper
 
 - `rw_matrix_inline.sh`
   - inlinecrypt-oriented buffered-I/O wrapper
+
+- `f2fs_gc_long_rw.py`
+  - long-running GC + writeback pressure runner that reuses `run_matrix_case()`
+  - auto-provisions a small plain F2FS image
+  - accepts a non-fs-level inline target as an existing root or block device
+
+- `case_f2fs_gc_8m_two_phase_image.py`
+  - small loop-backed two-phase GC case
+  - uses `utils/f2fs_gc.py` to pulse `f2fs_io gc_urgent` directly against the mounted loop device
+  - fills the target file with a deterministic baseline, then verifies on-disk content each group (drop_caches + reopen)
+  - when running inside the shared QEMU guest, expose `f2fs_io` on `PATH` first, for example:
+    `ln -sf /root/shared_with_host/f2fs-tools/f2fs-tools/tools/f2fs_io/f2fs_io /usr/local/bin/f2fs_io`
+
+- `case_f2fs_gc_8m_two_phase_inlinecrypt.py`
+  - loop-backed two-phase GC case targeting an fscrypt-encrypted directory on an `inlinecrypt` mount
+  - auto-creates a fresh f2fs image with `mkfs.f2fs -O encrypt` and mounts it with `-o mode=lfs,inlinecrypt`
+  - creates/unlocks an fscrypt directory using a raw key (default: `/opt/test-secrets/fscrypt-ci.key`)
+  - reuses the same deterministic baseline + on-disk verification strategy as the plain two-phase case
 
 - `mkwrite_test.py`
   - thin trace-aware frontend over builtin mmap cases
@@ -44,7 +87,9 @@ Prefer:
 
 - data-driven case registration
 - provider helper reuse
+- moving cross-case parse/verify helpers into `utils/` instead of duplicating them in `rw_test.py`
 - read-then-write as structured case configuration
+- long-running GC runners that call back into `run_matrix_case()` instead of re-implementing byte verification
 
 Avoid:
 
@@ -86,12 +131,18 @@ python3 rw_test.py mmap-case --name wp_subpage_read_then_write --file /tmp/rw_mm
 python3 rw_test.py mmap-matrix --target smoke=/tmp --case-filter wp_subpage --do-readahead
 ```
 
+```bash
+python3 f2fs_gc_long_rw.py --allow-plain-only --runtime-sec 5 --case-filter o0_aligned
+```
+
 ## Environment-Specific Runs
 
 Use wrappers only when the user needs the real target environment:
 
 - `./rw_matrix.sh`
 - `./rw_matrix_inline.sh`
+- `python3 f2fs_gc_long_rw.py --inline-root <mounted-inline-f2fs-root>`
+- `python3 case_f2fs_gc_8m_two_phase_image.py`
 - `python3 mkwrite_test.py --dir <mount>`
 
 These depend on mount state, root, inlinecrypt, fscrypt, or tracefs and should not be the first validation step unless the task explicitly requires environment coverage.

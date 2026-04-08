@@ -16,7 +16,7 @@ bash scripts/vm_enable_dyn_debug.sh 'func foo +p' 'file fs/f2fs/file.c line 100 
   - verifies `/sys/kernel/debug/dynamic_debug/control` writable
   - applies each spec with `echo "<spec>" > control`
   - tails and greps control file for common targets
-- Executes through `scripts/vm_ssh.sh`.
+- Executes through `.agents/tools/vm_ssh.sh`.
 
 ## Requirements
 - debugfs mounted in guest
