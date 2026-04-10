@@ -65,11 +65,20 @@ CONFIG = {
         "burst_size": 4,
         "heavy_per_burst": 2,
         "max_alive": 8,
-        "hold_ms": 5000,
+        # Default dwell after launching a package before we "exit" it (HOME) or evict older apps.
+        # User-requested flash behavior: ~200ms.
+        "hold_ms": 200,
         "launch_gap_ms": 350,
         "cycle_sleep_ms": 1000,
         "seed": 12345,
         "clear_logcat": True,
+        # Workload behavior toggles (kept as parameters, not a separate policy enum):
+        # - am_start_wait=False: use `am start` (no -W) to avoid fully waiting activity startup.
+        # - post_launch_action=home: after hold_ms, press HOME to exit foreground but keep process cached.
+        # - force_stop_evict=False: do not force-stop packages (leave cleanup to LMKD / natural pressure).
+        "am_start_wait": False,
+        "post_launch_action": "home",
+        "force_stop_evict": False,
     },
     "sample_retries": 2,
     "sample_retry_sleep_s": 2,
@@ -117,7 +126,22 @@ def resolve_activity(serial: str, pkg: str) -> Optional[str]:
 
 
 def start_activity(serial: str, component: str):
-    return adb_shell_cp(serial, f"am start -W -n {component}", timeout_s=45, check=False)
+    raise NotImplementedError("use start_activity_with_mode()")
+
+
+def start_activity_with_mode(serial: str, component: str, *, wait: bool):
+    # `am start -W` waits for launch to complete; without `-W` it returns much sooner.
+    cmd = f"am start {'-W ' if wait else ''}-n {component}".strip()
+    return adb_shell_cp(serial, cmd, timeout_s=45, check=False)
+
+
+def exit_to_home(serial: str):
+    # Prefer input keyevent (fast, doesn't depend on resolving HOME intent).
+    cp = adb_shell_cp(serial, "input keyevent KEYCODE_HOME", timeout_s=10, check=False)
+    if cp.returncode == 0:
+        return cp
+    # Fallback: explicitly start HOME.
+    return adb_shell_cp(serial, "am start -a android.intent.action.MAIN -c android.intent.category.HOME", timeout_s=20, check=False)
 
 
 def force_stop(serial: str, pkg: str):
@@ -175,6 +199,25 @@ class SamplingResult:
     samples: int = 0
     errors: int = 0
     exc: str = ""
+
+
+class CombinedEvent:
+    """A tiny `threading.Event`-like helper for composing stop conditions.
+
+    Some parts of the pipeline need a per-device stop (to stop that device's
+    sampler thread) while fleet mode needs a global stop (SIGINT/SIGTERM, or
+    fail-fast on error). `sample_loop()` only needs an object with `.is_set()`.
+    """
+
+    def __init__(self, *events: threading.Event):
+        self._events = [e for e in events if e is not None]
+
+    def is_set(self) -> bool:
+        return any(e.is_set() for e in self._events)
+
+    def set(self) -> None:
+        for e in self._events:
+            e.set()
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -235,8 +278,18 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
     p.add_argument("--burst-size", type=int, default=CONFIG["memstress"]["burst_size"])
     p.add_argument("--heavy-per-burst", type=int, default=CONFIG["memstress"]["heavy_per_burst"])
-    p.add_argument("--max-alive", type=int, default=CONFIG["memstress"]["max_alive"])
-    p.add_argument("--hold-ms", type=int, default=CONFIG["memstress"]["hold_ms"])
+    p.add_argument(
+        "--max-alive",
+        type=int,
+        default=CONFIG["memstress"]["max_alive"],
+        help="Keep at most N packages alive; when exceeded, kill oldest first (LRU-ish). Use 0 for start-then-kill.",
+    )
+    p.add_argument(
+        "--hold-ms",
+        type=int,
+        default=CONFIG["memstress"]["hold_ms"],
+        help="Hold milliseconds *after each successful launch* before post-launch action (HOME) and/or eviction.",
+    )
     p.add_argument("--launch-gap-ms", type=int, default=CONFIG["memstress"]["launch_gap_ms"])
     p.add_argument("--cycle-sleep-ms", type=int, default=CONFIG["memstress"]["cycle_sleep_ms"])
     p.add_argument("--seed", type=int, default=CONFIG["memstress"]["seed"], help="Deterministic seed")
@@ -245,6 +298,24 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=CONFIG["memstress"]["clear_logcat"],
         help="Clear logcat before starting workload/log collection",
+    )
+    p.add_argument(
+        "--am-start-wait",
+        action=argparse.BooleanOptionalAction,
+        default=CONFIG["memstress"]["am_start_wait"],
+        help="Use `am start -W` to wait for activity launch completion. Default: no-wait (`am start`).",
+    )
+    p.add_argument(
+        "--post-launch-action",
+        choices=["none", "home"],
+        default=CONFIG["memstress"]["post_launch_action"],
+        help="After hold_ms, perform an action to exit foreground without killing the process (default: home).",
+    )
+    p.add_argument(
+        "--force-stop-evict",
+        action=argparse.BooleanOptionalAction,
+        default=CONFIG["memstress"]["force_stop_evict"],
+        help="If enabled, enforce --max-alive via `am force-stop` and force-stop all remaining at end. Default: no force-stop.",
     )
 
     p.add_argument("--sample-retries", type=int, default=CONFIG["sample_retries"], help="Sampling retries per tick")
@@ -321,6 +392,9 @@ def run_one_device(
                 "cycle_sleep_ms": int(args.cycle_sleep_ms),
                 "seed": int(args.seed),
                 "clear_logcat": bool(args.clear_logcat),
+                "am_start_wait": bool(args.am_start_wait),
+                "post_launch_action": str(args.post_launch_action),
+                "force_stop_evict": bool(args.force_stop_evict),
             },
         },
         "samples": 0,
@@ -331,6 +405,11 @@ def run_one_device(
     write_run_manifest(out_dir / "run_manifest.json", manifest)
 
     try:
+        # Per-device stop is used to stop the sampler thread when this device finishes,
+        # without terminating other devices in fleet mode.
+        local_stop_event = threading.Event()
+        stop = CombinedEvent(stop_event, local_stop_event)
+
         maybe_install_apks(scripts_dir=scripts_dir, apk_dir=args.apk_dir, serial=serial, out_dir=out_dir)
 
         run_setup_cmds(serial, setup_cmds, use_su=bool(args.use_su), log_path=out_dir / "setup_log.txt")
@@ -402,13 +481,13 @@ def run_one_device(
                     out_csv=out_dir / "raw_samples.csv",
                     retries=max(0, int(args.sample_retries)),
                     retry_sleep_s=max(0, int(args.sample_retry_sleep_s)),
-                    stop_event=stop_event,
+                    stop_event=stop,
                 )
                 sampling_result.samples = n
                 sampling_result.errors = nerr
             except Exception as e:
                 sampling_result.exc = str(e)
-                stop_event.set()
+                stop.set()
 
         sampler_thread = threading.Thread(target=_sampler, name=f"thp_sampler_{serial}", daemon=True)
         sampler_thread.start()
@@ -444,7 +523,7 @@ def run_one_device(
             manifest["status"] = "running"
             write_run_manifest(out_dir / "run_manifest.json", manifest)
 
-            while not stop_event.is_set():
+            while not stop.is_set():
                 if time.time() >= deadline:
                     break
 
@@ -475,17 +554,34 @@ def run_one_device(
                     "alive_before_cleanup": list(alive),
                 }
 
+                max_alive = max(0, int(args.max_alive))
+
                 for pkg in chosen:
-                    if stop_event.is_set() or time.time() >= deadline:
+                    if stop.is_set() or time.time() >= deadline:
                         break
                     component = resolved[pkg]
-                    cp = start_activity(serial, component)
+                    cp = start_activity_with_mode(serial, component, wait=bool(args.am_start_wait))
                     stdout_text = (cp.stdout or "")
                     ok = cp.returncode == 0 and "Error:" not in stdout_text and "Exception occurred" not in stdout_text
                     if ok:
                         remove_from_alive(alive, pkg)
                         cycle_row["launched"].append(pkg)
                         launched_total += 1
+
+                        # Keep the just-launched app in foreground for a short dwell time.
+                        maybe_sleep(int(args.hold_ms), deadline)
+
+                        # Exit foreground without killing: default is HOME.
+                        if str(args.post_launch_action) == "home":
+                            exit_to_home(serial)
+
+                        # Optional eviction (old behavior): enforce max-alive via force-stop.
+                        if bool(args.force_stop_evict):
+                            while len(alive) > max_alive:
+                                victim = alive.popleft()
+                                force_stop(serial, victim)
+                                cycle_row["killed"].append(victim)
+                                killed_total += 1
                     else:
                         cycle_row["launch_errors"].append({
                             "package": pkg,
@@ -494,14 +590,6 @@ def run_one_device(
                             "stdout_tail": stdout_text.strip()[-300:],
                         })
                     maybe_sleep(int(args.launch_gap_ms), deadline)
-
-                maybe_sleep(int(args.hold_ms), deadline)
-
-                while len(alive) > max(1, int(args.max_alive)):
-                    victim = alive.popleft()
-                    force_stop(serial, victim)
-                    cycle_row["killed"].append(victim)
-                    killed_total += 1
 
                 cycle_row["alive_after_cleanup"] = list(alive)
                 cycle_log_f.write(json.dumps(cycle_row, ensure_ascii=False) + "\n")
@@ -514,11 +602,12 @@ def run_one_device(
                 maybe_sleep(int(args.cycle_sleep_ms), deadline)
 
             cleanup_killed: List[str] = []
-            while alive:
-                victim = alive.popleft()
-                force_stop(serial, victim)
-                cleanup_killed.append(victim)
-                killed_total += 1
+            if bool(args.force_stop_evict):
+                while alive:
+                    victim = alive.popleft()
+                    force_stop(serial, victim)
+                    cleanup_killed.append(victim)
+                    killed_total += 1
 
             end_meminfo = adb_shell_cp(serial, "dumpsys meminfo", timeout_s=60, check=False)
             (memstress_out / "dumpsys_meminfo_end.txt").write_text(end_meminfo.stdout or "", encoding="utf-8")
@@ -545,7 +634,8 @@ def run_one_device(
             except Exception:
                 pass
 
-        stop_event.set()
+        # Stop this device's sampler thread (do NOT stop other devices).
+        local_stop_event.set()
         sampler_thread.join(timeout=30)
         if sampling_result.exc:
             raise RuntimeError(f"sampling thread failed: {sampling_result.exc}")

@@ -81,6 +81,30 @@ When agents return:
 - Run full test suite
 - Integrate all changes
 
+## Codex Subagent Dispatch Rules (Governance-Aligned)
+
+These rules are extracted from `~/.agents/AGENTS.md` and belong here because they directly affect whether parallel subagent work is safe and low-conflict.
+
+**Use subagents only for bounded, low-conflict work**, for example:
+- test and log analysis
+- environment inspection
+- command and result summarization
+- governance note drafting
+- reference extraction
+- candidate script drafting
+
+**When dispatching subagents, always specify:**
+- how work is divided (A/B/C scopes)
+- which agent owns which output (file paths or artifacts)
+- whether all subagents must finish before synthesis
+- what summary format you expect back in the main thread
+
+**Avoid parallel subagents for overlapping write-heavy changes** unless you have:
+- strict file ownership (disjoint write sets), or
+- isolated worktrees per agent
+
+**If the main lane is blocked** (build/tests/downloads/polling), use that time for governance sidecar tasks, but do not edit the same files concurrently.
+
 ## Agent Prompt Structure
 
 Good agent prompts are:
@@ -122,6 +146,9 @@ Return: Summary of what you found and what you fixed.
 
 **❌ Vague output:** "Fix it" - you don't know what changed
 **✅ Specific:** "Return summary of root cause and changes"
+
+**❌ Forcing `model` in `spawn_agent`:** Can fail if the runtime’s subagent model allow-list differs
+**✅ Default to runtime choice:** Omit `model` unless you have a known-good allow-list (see `references/subagent-model-override.md`)
 
 ## When NOT to Use
 
@@ -180,3 +207,7 @@ From debugging session (2025-10-03):
 - All investigations completed concurrently
 - All fixes integrated successfully
 - Zero conflicts between agent changes
+
+## References
+
+- `references/subagent-model-override.md` - Why `spawn_agent.model` can break and when to omit it

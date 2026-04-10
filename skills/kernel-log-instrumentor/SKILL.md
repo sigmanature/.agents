@@ -47,7 +47,7 @@ Follow this decision flow.
 
 6. **Generate patch snippets**
    - Use the formatting rules in [references/log-format.md](references/log-format.md).
-   - Prefer `pr_debug()` plus dynamic_debug for temporary verbose logs.
+   - **Always** prefer `pr_debug()` plus dynamic_debug for temporary verbose logs.
    - If the user specifically needs unconditional visibility, or the running config lacks the needed debug support, generate `pr_emerg` / `KERN_EMERG` snippets instead.
    - Always include function name.
 
@@ -100,3 +100,5 @@ Unless the user asks otherwise, respond in this structure:
 - [references/detail-mode.md](references/detail-mode.md)
 - [references/tracepoint-upgrade.md](references/tracepoint-upgrade.md)
 - [references/log-table-workflow.md](references/log-table-workflow.md)
+- [references/fscrypt_open_einval_pkgxml.md](references/fscrypt_open_einval_pkgxml.md) (recipe for `/data/system/packages.xml` `open failed: EINVAL`)
+- [references/fsverity_open_einval_pkgxml.md](references/fsverity_open_einval_pkgxml.md) (recipe for `/data/system/packages.xml` `open failed: EINVAL` due to fs-verity)

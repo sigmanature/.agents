@@ -127,7 +127,30 @@ def adb_base(serial: str) -> List[str]:
 
 
 def adb_shell_cp(serial: str, cmd: str, *, timeout_s: int = 60, check: bool = False) -> subprocess.CompletedProcess:
-    return run(adb_base(serial) + ["shell", cmd], timeout_s=timeout_s, check=check)
+    """Run `adb shell <cmd>` and return a CompletedProcess.
+
+    Unlike `run(...)`, this helper is used in long-running loops (memstress/sampling).
+    We treat timeouts as a non-fatal outcome and return a synthetic CompletedProcess
+    with returncode=124, so callers can log and continue.
+    """
+
+    argv = adb_base(serial) + ["shell", cmd]
+    try:
+        return run(argv, timeout_s=timeout_s, check=check)
+    except subprocess.TimeoutExpired as e:
+        # `subprocess.run(..., text=True)` may still provide bytes in TimeoutExpired on some versions.
+        out = e.stdout
+        err = e.stderr
+        if isinstance(out, bytes):
+            out = out.decode("utf-8", "ignore")
+        if isinstance(err, bytes):
+            err = err.decode("utf-8", "ignore")
+        return subprocess.CompletedProcess(
+            argv,
+            124,
+            stdout=(out or ""),
+            stderr=(err or f"timeout after {timeout_s}s"),
+        )
 
 
 def adb_shell(

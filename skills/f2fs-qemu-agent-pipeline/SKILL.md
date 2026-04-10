@@ -1,6 +1,6 @@
 ---
 name: f2fs-qemu-agent-pipeline
-description: orchestrate safe and reproducible f2fs or qemu work inside a learn_os style kernel workspace. use when chatgpt needs to source .vars.sh, start qemu without blocking, validate kernel builds, run guest commands, run guest test scripts, verify f2fs/mounts, and collect logs with evidence. default to ssh when available, but if ssh is unavailable/blocked or the user explicitly requests qemu guest agent execution, use `.agents/tools/qga_exec.py` as the primary guest command runner.
+description: orchestrate safe and reproducible f2fs or qemu work inside a learn_os style kernel workspace. use when chatgpt needs to source .vars.sh, start qemu without blocking, validate kernel builds, run guest commands, run guest test scripts, verify f2fs/mounts, and collect logs with evidence. default to ssh when available, but if ssh is unavailable/blocked or the user explicitly requests qemu guest agent execution, use `scripts/qga_exec.py` as the primary guest command runner.
 ---
 
 # f2fs / qemu agent pipeline
@@ -228,13 +228,13 @@ Recommended order:
 
 When these scripts are available under this skill's `scripts/` directory, prefer them over ad-hoc command reconstruction. In this workspace, the absolute path is under `/home/nzzhao/.agents/skills/f2fs-qemu-agent-pipeline/scripts/`.
 
-- `.agents/tools/vm_start_bg.sh`:
+- `scripts/vm_start_bg.sh`:
   reference: [`references/script-vm_start_bg.md`](references/script-vm_start_bg.md)
-- `.agents/tools/qga_exec.py`:
+- `scripts/qga_exec.py`:
   reference: [`references/script-qga_exec.md`](references/script-qga_exec.md)
-- `.agents/tools/vm_stop.sh`:
+- `scripts/vm_stop.sh`:
   reference: [`references/script-vm_stop.md`](references/script-vm_stop.md)
-- `.agents/tools/vm_ssh.sh`:
+- `scripts/vm_ssh.sh`:
   reference: [`references/script-vm_ssh.md`](references/script-vm_ssh.md)
 - `/home/nzzhao/.agents/skills/f2fs-qemu-agent-pipeline/scripts/vm_enable_dyn_debug.sh`:
   reference: [`references/script-vm_enable_dyn_debug.md`](references/script-vm_enable_dyn_debug.md)
@@ -286,13 +286,14 @@ When the task is about F2FS behavior, mount behavior, on-disk effects, regressio
 - When shared directories or 9p mounts are required, verify the mounts explicitly before proceeding.
 - When an encrypted directory path is not confirmed, do not invent one; report that it is unknown.
 - If the workflow depends on guest-visible artifacts, verify they actually exist in the guest.
+- Reference (code-path overview): [`references/f2fs-verity-buffered-writeback-flow.md`](references/f2fs-verity-buffered-writeback-flow.md)
 
 
 ### Tracefs-first debugging pattern
 
 When debugging guest-side page-cache, mmap, readahead, or writeback behavior:
 
-- Prefer running guest commands through [`.agents/tools/vm_ssh.sh`](.agents/tools/vm_ssh.sh) with one wrapped remote command block instead of many ad hoc SSH calls.
+- Prefer running guest commands through [`scripts/vm_ssh.sh`](scripts/vm_ssh.sh) with one wrapped remote command block instead of many ad hoc SSH calls.
 - Prefer clearing and enabling only the needed tracepoints in `tracefs`, then running the reproduction, then filtering the captured trace before reporting.
 - If the bug is inode-specific, always collect the guest file inode with `stat`, convert the decimal inode to hex, and filter trace output by the hex inode because trace events such as `mm_filemap_fault` and `mm_filemap_add_to_page_cache` print inode values in hex.
 - Do not rely on `tail` of the whole trace buffer when the task is about a specific file; inode-filtered extraction is the default.
@@ -354,38 +355,3 @@ Before saying the task is done, verify the relevant facts actually happened:
 - “进 guest 看一下共享目录有没有挂上，顺便跑个非交互命令。”
 - “这个 F2FS 改动不要只看代码，帮我进 qemu 做一个可复现验证。”
 - “给我一个明确结论：到底是没启动、没连上 ssh，还是编译失败，日志在哪。”
-
-
-## Fscrypt preflight for rw_matrix.sh (lessons learned)
-
-When running `rw_matrix.sh` (or similar tests that assume an encrypted target dir):
-
-1. Do not assume `ENC_DIR` is encrypted just because it exists.
-2. Always verify both:
-   - `fscrypt status <ENC_DIR>` reports `is encrypted with fscrypt`, and
-   - `lsattr -d <ENC_DIR>` contains `E` flag.
-   - Note: `lsattr`'s `I` flag on F2FS is about inline data / inline dentry, **not** blk inline encryption.
-     Reference: [`references/fscrypt-inlinecrypt-vs-lsattr.md`](references/fscrypt-inlinecrypt-vs-lsattr.md)
-3. If filesystem has policy/protector but `ENC_DIR` is not encrypted, rebuild the directory:
-   - backup/move old plain directory,
-   - recreate empty directory,
-   - run `fscrypt encrypt <ENC_DIR> --policy=<mount>:<policy_id> --unlock-with=<mount>:<protector_id> --key=<raw_key_file> --quiet`,
-   - re-check `fscrypt status` and `lsattr`.
-4. Confirm newly created files under `ENC_DIR` also show encryption (`lsattr <file>` has `E` or `fscrypt status <file>` shows encrypted).
-5. For long runs via QGA, redirect script output to a guest log file and tail it separately; QGA command timeout does not imply script failure.
-6. If the run stalls or fails, immediately inspect `guest_console.log` for `Oops`, `BUG`, `Call trace`, `panic`, and include the first failing stack in report.
-
-Quick smoke test (inlinecrypt + fscrypt + persistence):
-
-- Guest path: `/root/shared_with_host/test/case/test_fscrypt_inlinecrypt_medium_persist.py`
-- Run (QGA): `python3 .agents/tools/qga_exec.py --timeout 600 'python3 /root/shared_with_host/test/case/test_fscrypt_inlinecrypt_medium_persist.py'`
-
-Recommended minimal preflight command block in guest:
-
-```bash
-fscrypt status /mnt/f2fs
-fscrypt status /mnt/f2fs/enc_test
-lsattr -d /mnt/f2fs/enc_test
-```
-
-If `enc_test` is not encrypted, repair before test execution.

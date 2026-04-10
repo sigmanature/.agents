@@ -38,6 +38,23 @@ If unsure, start with notes and re-evaluate during the task.
 
 ---
 
+## One-time clarification gate (ambiguity)
+
+At the very beginning of a task, if extra context is needed to avoid doing the wrong thing, ask the user **once** with a single consolidated message that covers all missing details.
+
+This is primarily for:
+- **Ambiguous intent**: unclear deliverable, success criteria, or scope (e.g. “optimize it”, “make it better”, “fix this” without error/output)
+- **Ambiguous file path / target**: path not found, multiple matches, unclear repo/worktree, unclear “which file” or “which module”
+
+Common additional ambiguity cases to include in that one-time question (when relevant):
+- **Ambiguous constraints**: “don’t change behavior” vs “refactor”, perf vs correctness, “minimal diff” vs “clean refactor”
+- **Ambiguous risk tolerance**: destructive operations, encryption/keys/credentials, large-scale edits, long-running jobs
+- **Ambiguous time references**: “today/latest/most recent” without an absolute date expectation
+
+Rule: ask all needed clarifications in a single message up front. Proceed after the user answers. Only ask again if new ambiguity is introduced by new requirements.
+
+---
+
 ## Operating mode
 
 Use two lanes:
@@ -90,6 +107,9 @@ However, parallel governance must follow these constraints:
 ## Codex-specific parallelism rule
 
 When using Codex, apply parallelism explicitly rather than implicitly.
+
+For subagent generation and parallel dispatch, **use `dispatching-parallel-agents` as the canonical playbook**:
+- `~/.agents/skills/dispatching-parallel-agents/SKILL.md`
 
 Use parallel work only for bounded, low-conflict tasks such as:
 - test and log analysis

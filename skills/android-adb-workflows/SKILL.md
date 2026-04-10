@@ -87,9 +87,13 @@ Load `references/adb_execution_reference.md` and follow its recommended patterns
 - `scripts/run_monkey_and_collect_logs.sh`
 - `scripts/stop_monkey_now.sh`
 - `scripts/adb_pkg.sh`
+- `scripts/logcat_sig_diff.py` (offline: compare 2 `logcat_all.txt` files)
 - `scripts/lf_unaligned_rw_smoke.sh` (large-folio + encrypted dir unaligned R/W smoke test)
+- `scripts/pkgxml_install_reboot_capture.sh` (install 1 APK -> reboot -> capture pm_critical packages.xml EINVAL evidence)
 - `scripts/adb_helpers.sh` (optional helpers for scripts; safe quoting patterns)
 - `references/adb_execution_reference.md`
 - `references/monkey_flags.md`
 - `references/pm_critical_packages_xml_einval.md` (PackageManager `packages.xml` `EINVAL` triage)
 - `references/large_folio_unaligned_rw_smoke.md` (how to run the unaligned R/W test)
+- `references/logcat_offline_compare.md` (offline: diff two devices’ logcat captures)
+- `references/native_lib_file_inspect.md` (inspect `/data/app/.../lib/arm64/*.so` via adb/su)

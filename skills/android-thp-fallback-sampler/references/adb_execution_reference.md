@@ -204,3 +204,9 @@ adb shell pm path com.example.app
 ```bash
 adb shell dumpsys dropbox --print | tail -n 200
 ```
+
+---
+
+## Notes for this skill’s scripts
+
+- 对于长时间 workload（例如 `run_memstress_and_collect_logs.py`），我们会把 `adb shell ...` 的 **超时** 当作一次可记录的失败，而不是直接抛异常中断整轮。你会在日志里看到 `returncode=124`（类似传统的 timeout 语义）。

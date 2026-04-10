@@ -22,5 +22,9 @@
 实现方式是 host 侧线程池并发（I/O bound 的 adb 调用），每个设备一个 worker：
 
 - 每个 worker 使用 `adb -s <serial> ...`，不会串台
-- Ctrl-C / SIGINT 会通过共享 stop_event 请求各 worker 尽快收尾（停止采样/退出循环/结束 workload）
+- Ctrl-C / SIGINT 会通过**全局 stop_event** 请求各 worker 尽快收尾（停止采样/退出循环/结束 workload）
 
+## 常见稳定性点（fleet 模式）
+
+- **每设备独立收尾**：每个设备内部会用一个“本地 stop”来停止该设备的采样线程并完成 `derive_metrics`，不会因为某个设备正常结束而把其他设备提前停掉。
+- **adb shell timeout 不再直接打断整轮**：例如 `am start -W ...` 可能偶发卡住。脚本会把 `adb shell` 超时视为一次失败（`returncode=124`），记录到 `memstress/cycle_log.jsonl` 的 `launch_errors`，然后继续跑下一包/下一轮。

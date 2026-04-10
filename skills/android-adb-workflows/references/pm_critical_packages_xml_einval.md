@@ -11,6 +11,23 @@ Key point:
 - This is **not** “PackageManager forgot to fsync the APK”.
 - It means **`open()` on `packages.xml` failed in the kernel with `-EINVAL`**, then PackageManager deletes/rebuilds its settings, causing “apps disappeared”.
 
+## Very fast discriminator: is it `fs-verity` or `fscrypt`?
+
+On device (root):
+
+```bash
+adb shell su -c 'lsattr -a /data/system/packages.xml /data/system/packages.xml.reservecopy'
+```
+
+- If you see `V` on the files (fs-verity flag), then `open()` can fail because **fs-verity descriptor validation returned `-EINVAL`**.
+- If you see only `E` (encrypted) but not `V`, then fscrypt/key/context problems become more likely.
+
+In kernel logs, fs-verity problems are usually obvious:
+
+```bash
+rg -n 'fs-verity \\(.*inode .*\\): Unrecognized descriptor version' kernel_stream.txt | head
+```
+
 ## Fast evidence checklist (captured logs)
 
 If you used a capture layout like:
@@ -36,6 +53,19 @@ rg -n 'f2fs_evict_inode|renameat2|do_renameat2' pstore_once.txt | head
 ```
 
 ## Most likely root-cause buckets (ordered)
+
+### 0) fs-verity metadata corruption / incomplete writeback (very likely if `V` flag is set)
+
+If you see both:
+- `lsattr` shows `V` for `packages.xml*`, and
+- dmesg shows `fs-verity (..., inode ...): Unrecognized descriptor version: 0`
+
+then `open()` is failing because fs-verity reads a descriptor and validates `desc->version == 1`, but it got `0` (often “all zeros”).
+
+One known kernel-side cause (especially with **large folio** changes):
+- f2fs stores verity descriptor + Merkle tree **past i_size** (see `fs/f2fs/verity.c`).
+- While building verity, F2FS sets `FI_VERITY_IN_PROGRESS` and must write back dirty pages **beyond i_size** before clearing it.
+- The 4K writeback path already special-cases `f2fs_verity_in_progress(inode)`, but a folio-based writeback path that clamps to `i_size` can silently skip those pages, leaving the descriptor unwritten on disk.
 
 ### 1) Filesystem “crash-recovery / fsck happened” and PackageManager settings got clobbered
 
@@ -70,6 +100,7 @@ You normally expect a matching kernel log line via `fscrypt_warn()` if this happ
 **Concrete kernel call path (useful when interpreting `open failed: EINVAL`)**
 
 - `fs/f2fs/file.c`: `f2fs_file_open()` calls `fscrypt_file_open(inode, filp)` first.
+- `fs/f2fs/file.c`: `f2fs_file_open()` then calls `fsverity_file_open(inode, filp)`.
 - `fs/crypto/hooks.c`: `fscrypt_file_open()` calls `fscrypt_require_key(inode)`.
 - `fs/crypto/keysetup.c`: `fscrypt_get_encryption_info()` returns `-EINVAL` specifically when:
   - `fscrypt_policy_from_context()` fails (context is “unrecognized or corrupt”), or

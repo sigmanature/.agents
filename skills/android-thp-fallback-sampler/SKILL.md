@@ -142,9 +142,12 @@ python3 scripts/run_memstress_and_collect_logs.py \
 - `--package <pkg>` / `--package-file <file>`：memstress 的目标 app 集合
 - `--heavy-package <pkg>` / `--heavy-package-file <file>`：显式标记重型 app，优先在每轮启动
 - `--burst-size <n>` / `--heavy-per-burst <n>`：每轮启动数量与 heavy 目标数
-- `--max-alive <n>` / `--hold-ms <ms>`：存活上限与 hold 时长
+- `--max-alive <n>` / `--hold-ms <ms>`：最多保活 n 个包（仅在 `--force-stop-evict` 时生效）；每次成功启动后 hold（用于“闪进一会再回桌面/再 kill”的节奏控制）
 - `--launch-gap-ms <ms>` / `--cycle-sleep-ms <ms>`：启动间隔与轮间隔
 - `--prefer-keywords <csv>`：关键词自动偏置（camera/video/...）
+- `--am-start-wait/--no-am-start-wait`：是否使用 `am start -W` 等待启动完成（默认不等）
+- `--post-launch-action none|home`：启动后 hold 结束后执行动作（默认 `home`，只退出前台不杀进程）
+- `--force-stop-evict/--no-force-stop-evict`：是否允许用 `am force-stop` 做淘汰与末尾 cleanup（默认不 force-stop）
 
 ---
 
@@ -186,6 +189,7 @@ python3 scripts/run_memstress_and_collect_logs.py \
 
 - **计数器是累计值**：一定用 `derived.csv` 里的 Δ 计算比率，而不是直接用 raw。
 - adb 偶发断开：脚本会对采样做重试，失败会记录 `error` 字段但继续跑。
+- adb 显示 `device offline`：参考 `references/adb_device_offline_recovery.md` 的恢复步骤（`adb reconnect offline` / 重启 adb server）。
 - setup 命令带重定向：本工具会统一通过 `sh -c` 执行；需要 root 的话配合 `--use-su`。
 - 某些设备写 `.../enabled` 这类 sysfs 节点时，`adb shell su -c` 不够，必须带 TTY；脚本里的 THP ensure 写入已按这个方式处理。
 - 某些设备上，monkey 前的亮屏/解锁必须用朴素的 `input keyevent KEYCODE_WAKEUP`、`wm dismiss-keyguard`、`input swipe`；`cmd input keyboard ...` 这类写法可能不会真正把设备从 `Dozing` 拉到 `Awake`。
@@ -199,6 +203,7 @@ python3 scripts/run_memstress_and_collect_logs.py \
 - `scripts/run_monkey.py`：跑采样 + monkey（logcat + monkey stdout/stderr + dumpsys）
 - `scripts/run_memstress_and_collect_logs.py`：跑采样 + memstress（logcat + cycle log + dumpsys）
 - `scripts/plot_derived_svg.py`：把 `derived.csv` 画成 `SVG`（无 matplotlib/pandas 依赖；支持多设备多曲线）
+- `scripts/watch_live_plot.py`：长测期间定期从 `raw_samples.csv` 生成临时 `derived.csv` 并更新对比 `SVG`（`latest/` + `archive/`）
 
 ### 绘图示例（无 matplotlib）
 
@@ -221,8 +226,13 @@ python3 scripts/plot_derived_svg.py \
 - `scripts/derive_metrics.py`：把 raw CSV 变成 derived+summary
 - `scripts/compare_derived.py`：对比两个 `derived.csv`（有 matplotlib 时输出对比图）
 - `scripts/apk_batch_install.py`：来自 wechat-wxapkg-and-apk-batch-tools（批量安装逻辑请参阅该 skill 的 SKILL.md）
+- `scripts/run_thp_memstress_top100_dual_9h.sh`：双设备一键编排（可选批量安装 top100 APK + 9h memstress + 画图）
 - `scripts/adb_pkg.sh`, `scripts/adb_helpers.sh`
 - `scripts/utils/`：公共函数（adb/tty/su、设备亮屏解锁常亮、采样、THP ensure、out-dir/setup/install 工具函数）
 - `references/adb_execution_reference.md`, `references/monkey_flags.md`
+- `references/apk_batch_install_flatten_dir.md`：当 APK 分散在多个目录时的“扁平化”安装目录做法 + 常见 install 失败排查
+- `references/long_run_detach.md`：在 Codex/非交互环境里可靠地后台启动多小时任务（setsid + pidfile）
+- `references/app_subset_selection.md`：为 flash-kill/短周期 churn 挑选 ≤20 个“重型 app”子集的建议与校验规则
+- `references/memstress_kill_strategy.md`：memstress 的启动/保活/force-stop 统一策略（通过参数表达极端与稳态）
 - `references/memstress_package_validation.md`：解释 memstress 为什么要校验/解析包名
 - `references/fleet_parallel.md`：解释单进程多设备并行与输出目录分层
