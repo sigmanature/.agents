@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Run THP anon fallback sampling + a memory-heavy Android app launch/kill workload via adb.
+"""Run THP anon fallback sampling + a memory-heavy Android app launch workload via adb.
 
 The workload is host-side:
 - repeatedly launches a burst of apps
-- keeps several apps alive to grow resident memory pressure
-- force-stops older apps to keep the cycle moving
+- after each launch, waits briefly then presses HOME (exit foreground without killing)
 - biases heavy apps such as camera/video/media packages
 
 Outputs (under --out-dir):
@@ -64,7 +63,6 @@ CONFIG = {
         "prefer_keywords": "camera,video,recorder,player,gallery,photo,media,stream",
         "burst_size": 4,
         "heavy_per_burst": 2,
-        "max_alive": 8,
         # Default dwell after launching a package before we "exit" it (HOME) or evict older apps.
         # User-requested flash behavior: ~200ms.
         "hold_ms": 200,
@@ -72,13 +70,6 @@ CONFIG = {
         "cycle_sleep_ms": 1000,
         "seed": 12345,
         "clear_logcat": True,
-        # Workload behavior toggles (kept as parameters, not a separate policy enum):
-        # - am_start_wait=False: use `am start` (no -W) to avoid fully waiting activity startup.
-        # - post_launch_action=home: after hold_ms, press HOME to exit foreground but keep process cached.
-        # - force_stop_evict=False: do not force-stop packages (leave cleanup to LMKD / natural pressure).
-        "am_start_wait": False,
-        "post_launch_action": "home",
-        "force_stop_evict": False,
     },
     "sample_retries": 2,
     "sample_retry_sleep_s": 2,
@@ -126,13 +117,8 @@ def resolve_activity(serial: str, pkg: str) -> Optional[str]:
 
 
 def start_activity(serial: str, component: str):
-    raise NotImplementedError("use start_activity_with_mode()")
-
-
-def start_activity_with_mode(serial: str, component: str, *, wait: bool):
-    # `am start -W` waits for launch to complete; without `-W` it returns much sooner.
-    cmd = f"am start {'-W ' if wait else ''}-n {component}".strip()
-    return adb_shell_cp(serial, cmd, timeout_s=45, check=False)
+    # Intentionally do NOT use `-W`: avoid fully waiting for activity launch completion.
+    return adb_shell_cp(serial, f"am start -n {component}", timeout_s=20, check=False)
 
 
 def exit_to_home(serial: str):
@@ -142,10 +128,6 @@ def exit_to_home(serial: str):
         return cp
     # Fallback: explicitly start HOME.
     return adb_shell_cp(serial, "am start -a android.intent.action.MAIN -c android.intent.category.HOME", timeout_s=20, check=False)
-
-
-def force_stop(serial: str, pkg: str):
-    return adb_shell_cp(serial, f"am force-stop {pkg}", timeout_s=20, check=False)
 
 
 def maybe_sleep(ms: int, deadline: Optional[float]) -> None:
@@ -184,14 +166,6 @@ def take_from_pool(pool: Deque[str], count: int, banned: Set[str]) -> List[str]:
         picked.append(item)
         seen_this_round.add(item)
     return picked
-
-
-def remove_from_alive(alive: Deque[str], pkg: str) -> None:
-    try:
-        alive.remove(pkg)
-    except ValueError:
-        pass
-    alive.append(pkg)
 
 
 @dataclass
@@ -279,16 +253,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--burst-size", type=int, default=CONFIG["memstress"]["burst_size"])
     p.add_argument("--heavy-per-burst", type=int, default=CONFIG["memstress"]["heavy_per_burst"])
     p.add_argument(
-        "--max-alive",
-        type=int,
-        default=CONFIG["memstress"]["max_alive"],
-        help="Keep at most N packages alive; when exceeded, kill oldest first (LRU-ish). Use 0 for start-then-kill.",
-    )
-    p.add_argument(
         "--hold-ms",
         type=int,
         default=CONFIG["memstress"]["hold_ms"],
-        help="Hold milliseconds *after each successful launch* before post-launch action (HOME) and/or eviction.",
+        help="Hold milliseconds *after each successful launch* before pressing HOME to exit foreground (no force-stop).",
     )
     p.add_argument("--launch-gap-ms", type=int, default=CONFIG["memstress"]["launch_gap_ms"])
     p.add_argument("--cycle-sleep-ms", type=int, default=CONFIG["memstress"]["cycle_sleep_ms"])
@@ -298,24 +266,6 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=CONFIG["memstress"]["clear_logcat"],
         help="Clear logcat before starting workload/log collection",
-    )
-    p.add_argument(
-        "--am-start-wait",
-        action=argparse.BooleanOptionalAction,
-        default=CONFIG["memstress"]["am_start_wait"],
-        help="Use `am start -W` to wait for activity launch completion. Default: no-wait (`am start`).",
-    )
-    p.add_argument(
-        "--post-launch-action",
-        choices=["none", "home"],
-        default=CONFIG["memstress"]["post_launch_action"],
-        help="After hold_ms, perform an action to exit foreground without killing the process (default: home).",
-    )
-    p.add_argument(
-        "--force-stop-evict",
-        action=argparse.BooleanOptionalAction,
-        default=CONFIG["memstress"]["force_stop_evict"],
-        help="If enabled, enforce --max-alive via `am force-stop` and force-stop all remaining at end. Default: no force-stop.",
     )
 
     p.add_argument("--sample-retries", type=int, default=CONFIG["sample_retries"], help="Sampling retries per tick")
@@ -386,15 +336,11 @@ def run_one_device(
                 "prefer_keywords": args.prefer_keywords,
                 "burst_size": int(args.burst_size),
                 "heavy_per_burst": int(args.heavy_per_burst),
-                "max_alive": int(args.max_alive),
                 "hold_ms": int(args.hold_ms),
                 "launch_gap_ms": int(args.launch_gap_ms),
                 "cycle_sleep_ms": int(args.cycle_sleep_ms),
                 "seed": int(args.seed),
                 "clear_logcat": bool(args.clear_logcat),
-                "am_start_wait": bool(args.am_start_wait),
-                "post_launch_action": str(args.post_launch_action),
-                "force_stop_evict": bool(args.force_stop_evict),
             },
         },
         "samples": 0,
@@ -514,10 +460,8 @@ def run_one_device(
             all_pool: Deque[str] = deque(all_pool_list)
             heavy_pool: Deque[str] = deque(heavy_pool_list)
 
-            alive: Deque[str] = deque()
             cycle = 0
             launched_total = 0
-            killed_total = 0
             deadline = time.time() + duration_s
 
             manifest["status"] = "running"
@@ -550,38 +494,24 @@ def run_one_device(
                     "chosen": chosen,
                     "launched": [],
                     "launch_errors": [],
-                    "killed": [],
-                    "alive_before_cleanup": list(alive),
                 }
-
-                max_alive = max(0, int(args.max_alive))
 
                 for pkg in chosen:
                     if stop.is_set() or time.time() >= deadline:
                         break
                     component = resolved[pkg]
-                    cp = start_activity_with_mode(serial, component, wait=bool(args.am_start_wait))
+                    cp = start_activity(serial, component)
                     stdout_text = (cp.stdout or "")
                     ok = cp.returncode == 0 and "Error:" not in stdout_text and "Exception occurred" not in stdout_text
                     if ok:
-                        remove_from_alive(alive, pkg)
                         cycle_row["launched"].append(pkg)
                         launched_total += 1
 
                         # Keep the just-launched app in foreground for a short dwell time.
                         maybe_sleep(int(args.hold_ms), deadline)
 
-                        # Exit foreground without killing: default is HOME.
-                        if str(args.post_launch_action) == "home":
-                            exit_to_home(serial)
-
-                        # Optional eviction (old behavior): enforce max-alive via force-stop.
-                        if bool(args.force_stop_evict):
-                            while len(alive) > max_alive:
-                                victim = alive.popleft()
-                                force_stop(serial, victim)
-                                cycle_row["killed"].append(victim)
-                                killed_total += 1
+                        # Exit foreground without killing the process.
+                        exit_to_home(serial)
                     else:
                         cycle_row["launch_errors"].append({
                             "package": pkg,
@@ -591,23 +521,14 @@ def run_one_device(
                         })
                     maybe_sleep(int(args.launch_gap_ms), deadline)
 
-                cycle_row["alive_after_cleanup"] = list(alive)
                 cycle_log_f.write(json.dumps(cycle_row, ensure_ascii=False) + "\n")
                 cycle_log_f.flush()
                 print(
                     f"[{serial}][memstress] cycle={cycle} launched={len(cycle_row['launched'])} "
-                    f"killed={len(cycle_row['killed'])} alive={len(alive)}"
+                    f"errors={len(cycle_row['launch_errors'])}"
                 )
 
                 maybe_sleep(int(args.cycle_sleep_ms), deadline)
-
-            cleanup_killed: List[str] = []
-            if bool(args.force_stop_evict):
-                while alive:
-                    victim = alive.popleft()
-                    force_stop(serial, victim)
-                    cleanup_killed.append(victim)
-                    killed_total += 1
 
             end_meminfo = adb_shell_cp(serial, "dumpsys meminfo", timeout_s=60, check=False)
             (memstress_out / "dumpsys_meminfo_end.txt").write_text(end_meminfo.stdout or "", encoding="utf-8")
@@ -616,10 +537,8 @@ def run_one_device(
                 "serial": serial,
                 "cycles": cycle,
                 "launched_total": launched_total,
-                "killed_total": killed_total,
                 "runnable_packages": len(runnable_pkgs),
                 "heavy_packages": inferred_heavy,
-                "cleanup_killed": cleanup_killed,
                 "stopped_by_signal": stop_event.is_set(),
             }
             (memstress_out / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

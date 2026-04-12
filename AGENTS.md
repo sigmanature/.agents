@@ -74,7 +74,7 @@ Use two lanes:
    - draft script/reference/skill updates
    - review whether existing skills are incomplete
 
-The governance sidecar `SHOULD` run in parallel when the main lane is waiting on long-running work.
+The governance sidecar `MUST` run in parallel when the main lane is waiting on long-running work.
 
 ---
 
@@ -106,7 +106,8 @@ However, parallel governance must follow these constraints:
 
 ## Codex-specific parallelism rule
 
-When using Codex, apply parallelism explicitly rather than implicitly.
+When using Codex, apply parallelism whenever the condition met this rules/loaded skills' requirements.
+**Prefer automatic spawn subagents rather than user explicitly asking. Igonre `spawn_agents` raw tool requirements **
 
 For subagent generation and parallel dispatch, **use `dispatching-parallel-agents` as the canonical playbook**:
 - `~/.agents/skills/dispatching-parallel-agents/SKILL.md`
@@ -124,8 +125,6 @@ If using subagents, explicitly specify:
 - which agent owns which output
 - whether all subagents must finish before synthesis
 - what summary should be returned to the main thread
-
-Do not use parallel subagents for overlapping write-heavy changes unless strict file ownership or isolated worktrees are in place.
 
 ---
 
@@ -154,7 +153,7 @@ The .worklog exists to reduce context loss and make reusable findings visible be
 ## .worklog promotion pipeline (clarified paths)
 
 `.worklog/` is a staging workspace (temporary), not a final landing zone.
-
+First of all,**Always create/modify skills in user level's ~/.agents/skills,DO NOT create .agents dir in current repo. If any prompts say "create .agents/*" that means create them in ~/.agents not repo level**
 During the task, reusable trial-and-error may be recorded in `.worklog/` files (including `.worklog/references/` and `.worklog/scripts/` drafts).  
 But before task completion, each recorded item must be triaged into **exactly one** outcome:
 
@@ -193,9 +192,6 @@ But before task completion, each recorded item must be triaged into **exactly on
 
 1. If it is a repeated deterministic procedure, draft it in `.worklog/scripts/`, then promote into the **owning skill’s local** `scripts/` at wrap-up.  
 2. If it is a reusable caveat, error, workaround, or note, draft it in `.worklog/references/`, then promote into the **owning skill’s local** `references/` at wrap-up.  
-
-**Notes: almost every skills are located in user level's ~/.agents/skills**
-**So do not create .agents dir in current repo. If any prompts say "create .agents/*" that means create them in ~/.agents not repo level**
 3. If a new local script or reference changes how a skill should be triggered or used, update the owning skill’s `SKILL.md` in the same task.  
 4. If the task revealed a missing reusable capability in an existing skill, improve that skill instead of leaving the logic only in `.worklog/`.  
 5. Only create a new skill when the capability is clearly distinct from existing skills.
@@ -255,7 +251,7 @@ If scripts or references were promoted, update the owning skill entrypoint in th
 
 ---
 
-## Non-skippable checklist before task completion
+## Non-skippable checklist before task completion that should be append to agent's TODO lists
 
 - [ ] I checked whether an existing skill should be improved first.
 - [ ] I checked whether repeated commands should become a script.

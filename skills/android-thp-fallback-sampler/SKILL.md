@@ -75,7 +75,7 @@ python3 scripts/run_monkey.py \
 
 ### 3) 跑“采样 + memstress”长测
 
-适用于更强调内存占用与快速切换的场景：每轮快速启动多 app，保留一部分存活，再 force-stop 更早的 app，持续制造 app 工作集变化。
+适用于更强调**快速切换/冷启动 churn** 的场景：每轮快速启动多 app，每次启动后 hold 一小段时间，然后按 HOME 返回桌面（不 force-stop，不做 LRU）。
 
 ```bash
 python3 scripts/run_memstress_and_collect_logs.py \
@@ -90,8 +90,7 @@ python3 scripts/run_memstress_and_collect_logs.py \
   --heavy-package com.google.android.apps.youtube.unplugged \
   --burst-size 4 \
   --heavy-per-burst 2 \
-  --max-alive 8 \
-  --hold-ms 5000
+  --hold-ms 200
 ```
 
 ---
@@ -142,12 +141,9 @@ python3 scripts/run_memstress_and_collect_logs.py \
 - `--package <pkg>` / `--package-file <file>`：memstress 的目标 app 集合
 - `--heavy-package <pkg>` / `--heavy-package-file <file>`：显式标记重型 app，优先在每轮启动
 - `--burst-size <n>` / `--heavy-per-burst <n>`：每轮启动数量与 heavy 目标数
-- `--max-alive <n>` / `--hold-ms <ms>`：最多保活 n 个包（仅在 `--force-stop-evict` 时生效）；每次成功启动后 hold（用于“闪进一会再回桌面/再 kill”的节奏控制）
+- `--hold-ms <ms>`：每次成功启动后 hold（用于“闪进一会再回桌面”的节奏控制；默认 200ms）
 - `--launch-gap-ms <ms>` / `--cycle-sleep-ms <ms>`：启动间隔与轮间隔
 - `--prefer-keywords <csv>`：关键词自动偏置（camera/video/...）
-- `--am-start-wait/--no-am-start-wait`：是否使用 `am start -W` 等待启动完成（默认不等）
-- `--post-launch-action none|home`：启动后 hold 结束后执行动作（默认 `home`，只退出前台不杀进程）
-- `--force-stop-evict/--no-force-stop-evict`：是否允许用 `am force-stop` 做淘汰与末尾 cleanup（默认不 force-stop）
 
 ---
 
@@ -195,6 +191,7 @@ python3 scripts/run_memstress_and_collect_logs.py \
 - 某些设备上，monkey 前的亮屏/解锁必须用朴素的 `input keyevent KEYCODE_WAKEUP`、`wm dismiss-keyguard`、`input swipe`；`cmd input keyboard ...` 这类写法可能不会真正把设备从 `Dozing` 拉到 `Awake`。
 - monkey runner 现在默认带 `--ignore-native-crashes`，避免某个 app 的 native crash 直接把整轮 workload 打断；只有显式传 `--abort-on-native-crash` 时才恢复 crash-stop 行为。
 - memstress 只会在你显式传入的 package 集合内循环，不会像 `monkey --global` 那样全域乱跑；如果想强行偏向相机/视频，优先传明确的 `--memstress-heavy-package`，不要只依赖关键词猜测。
+- memstress 当前策略已精简为：`am start`（不带 `-W`）+ hold + HOME，不做 `force-stop`/LRU；详见 `references/memstress_strategy.md`。
 
 ---
 
@@ -233,6 +230,6 @@ python3 scripts/plot_derived_svg.py \
 - `references/apk_batch_install_flatten_dir.md`：当 APK 分散在多个目录时的“扁平化”安装目录做法 + 常见 install 失败排查
 - `references/long_run_detach.md`：在 Codex/非交互环境里可靠地后台启动多小时任务（setsid + pidfile）
 - `references/app_subset_selection.md`：为 flash-kill/短周期 churn 挑选 ≤20 个“重型 app”子集的建议与校验规则
-- `references/memstress_kill_strategy.md`：memstress 的启动/保活/force-stop 统一策略（通过参数表达极端与稳态）
+- `references/memstress_strategy.md`：memstress 简化策略（`am start` + hold + HOME，不 force-stop）
 - `references/memstress_package_validation.md`：解释 memstress 为什么要校验/解析包名
 - `references/fleet_parallel.md`：解释单进程多设备并行与输出目录分层

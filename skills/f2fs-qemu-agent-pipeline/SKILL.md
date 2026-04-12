@@ -287,6 +287,8 @@ When the task is about F2FS behavior, mount behavior, on-disk effects, regressio
 - When an encrypted directory path is not confirmed, do not invent one; report that it is unknown.
 - If the workflow depends on guest-visible artifacts, verify they actually exist in the guest.
 - Reference (code-path overview): [`references/f2fs-verity-buffered-writeback-flow.md`](references/f2fs-verity-buffered-writeback-flow.md)
+- Reference (interface mapping): [`references/f2fs-sysfs-procfs-interface.md`](references/f2fs-sysfs-procfs-interface.md)
+- Reference (knob usage + adding): [`references/f2fs-sysfs-knobs-usage-and-adding.md`](references/f2fs-sysfs-knobs-usage-and-adding.md)
 
 
 ### Tracefs-first debugging pattern
