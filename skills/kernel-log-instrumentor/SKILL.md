@@ -58,6 +58,8 @@ Follow this decision flow.
    - Design log lines so each line is a self-contained row with stable `k=v` fields.
    - Include both actor ids (`pid`, `comm`, `cpu`) and shared-object ids (`ino`, `index`, `folio`, `seq`, custom ids).
    - Explain how to query the resulting log with [references/log-table-workflow.md](references/log-table-workflow.md) and `scripts/kernel_log_kv_query.py`.
+   - When using `pr_debug()`/dynamic_debug, provide a reproducible enable/disable recipe; for f2fs table-mode examples see `scripts/enable_f2fs_inode_kv_logs.sh`.
+   - If the user explicitly wants “大胆打日志” (always-on visibility), prefer `pr_emerg` but **still keep an inode/range filter**; see [references/f2fs-writeback-kv-logs.md](references/f2fs-writeback-kv-logs.md).
 
 ## Output format
 Unless the user asks otherwise, respond in this structure:
@@ -100,5 +102,9 @@ Unless the user asks otherwise, respond in this structure:
 - [references/detail-mode.md](references/detail-mode.md)
 - [references/tracepoint-upgrade.md](references/tracepoint-upgrade.md)
 - [references/log-table-workflow.md](references/log-table-workflow.md)
+- [references/f2fs-writeback-kv-logs.md](references/f2fs-writeback-kv-logs.md)
+- [references/f2fs-writeback-kv-filter.md](references/f2fs-writeback-kv-filter.md)
+- [references/f2fs-inode-centric-atomic-verity-large-folio.md](references/f2fs-inode-centric-atomic-verity-large-folio.md)
 - [references/fscrypt_open_einval_pkgxml.md](references/fscrypt_open_einval_pkgxml.md) (recipe for `/data/system/packages.xml` `open failed: EINVAL`)
 - [references/fsverity_open_einval_pkgxml.md](references/fsverity_open_einval_pkgxml.md) (recipe for `/data/system/packages.xml` `open failed: EINVAL` due to fs-verity)
+- [references/pixel-kleaf-build-gotchas.md](references/pixel-kleaf-build-gotchas.md) (Bazel/Kleaf build pitfalls in local Pixel checkouts)

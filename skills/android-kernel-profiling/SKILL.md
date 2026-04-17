@@ -22,6 +22,7 @@ Use `simpleperf` as the default answer for Android kernel CPU profiling. Use `Pe
    - **Need kernel percentage or split** -> `simpleperf stat` with `:u` / `:k` events.
    - **Need kernel hotspots or call stacks** -> `simpleperf record -g` and `report_html.py`.
    - **Need scheduling / blocking / tracepoints / f2fs timeline** -> `Perfetto`.
+   - **Need to prove a specific F2FS ioctl path ran** -> use tracefs/kprobes/strace recipes in `references/f2fs-atomic-write-evidence.md`.
    - **Need Linux-perf parity** -> explain native `perf` as optional and higher friction.
 
 3. Explain host/device placement clearly:

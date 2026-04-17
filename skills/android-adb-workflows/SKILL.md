@@ -83,11 +83,49 @@ chmod +x scripts/adb_pkg.sh
 ### C) User asks about pulling tombstones / ANR traces / dropbox, or “root pitfalls”
 Load `references/adb_execution_reference.md` and follow its recommended patterns (especially `su -c` + `sh -c` nesting and safe artifact pulling).
 
+### D) User asks to uninstall then reinstall an app (APK in hand)
+Use the shipped reinstall helper:
+
+```bash
+chmod +x scripts/adb_reinstall_apk.sh
+./scripts/adb_reinstall_apk.sh --serial <SERIAL> --package <pkg.name> --apk <path.apk> --launch
+```
+
+If the user doesn’t know `<pkg.name>`, use `scripts/adb_pkg.sh` to discover it first.
+
+If the user asks to reinstall the common 4-app set (WeChat/UC/Douyin/Huoshan), use:
+
+```bash
+chmod +x scripts/adb_reinstall_wechat_douyin_uc_huoshan.sh
+./scripts/adb_reinstall_wechat_douyin_uc_huoshan.sh --serial <SERIAL> --base-dir <DIR_WITH_APKS> --allow-downgrade --grant --launch
+```
+
+### E) User asks to locate app SQLite DB files / WAL/SHM / “where is the database?”
+Use the consolidated suite: `sqlite-wal-repro-suite` (preferred).
+
+### F) User asks what UI actions can trigger SQLite writes in third-party apps
+Use the consolidated suite: `sqlite-wal-repro-suite` (preferred).
+
+### G) User asks for a script to generate SQLite write load (Settings / Launcher)
+
+Use the consolidated suite: `sqlite-wal-repro-suite` (preferred).
+
+### H) User asks to reproduce SQLite WAL + checkpoint IO and capture syscall/fs traces
+
+Use the consolidated suite: `sqlite-wal-repro-suite` (preferred).
+
+### I) User asks to reproduce WAL corruption inside fscrypt app sandbox
+
+Use the consolidated suite: `sqlite-wal-repro-suite` (preferred).
+
 ## Included resources
 - `scripts/run_monkey_and_collect_logs.sh`
 - `scripts/stop_monkey_now.sh`
 - `scripts/adb_pkg.sh`
+- `scripts/adb_reinstall_apk.sh` (uninstall + reinstall 1 APK)
+- `scripts/adb_reinstall_wechat_douyin_uc_huoshan.sh` (uninstall + reinstall WeChat/UC/Douyin/Huoshan)
 - `scripts/logcat_sig_diff.py` (offline: compare 2 `logcat_all.txt` files)
+- `scripts/logcat_storage_triage.py` (offline: scan 1 `logcat_all.txt` for storage-ish signals + top crashes)
 - `scripts/lf_unaligned_rw_smoke.sh` (large-folio + encrypted dir unaligned R/W smoke test)
 - `scripts/pkgxml_install_reboot_capture.sh` (install 1 APK -> reboot -> capture pm_critical packages.xml EINVAL evidence)
 - `scripts/adb_helpers.sh` (optional helpers for scripts; safe quoting patterns)
@@ -96,4 +134,7 @@ Load `references/adb_execution_reference.md` and follow its recommended patterns
 - `references/pm_critical_packages_xml_einval.md` (PackageManager `packages.xml` `EINVAL` triage)
 - `references/large_folio_unaligned_rw_smoke.md` (how to run the unaligned R/W test)
 - `references/logcat_offline_compare.md` (offline: diff two devices’ logcat captures)
+- `references/logcat_storage_triage.md` (offline: decide “storage regression vs app/dex/classloader” quickly)
+- `references/dex_classnotfound_storage_triage.md` (CNFE widespread after reboot: map crash->apk->oat/vdex + storage signals + safe recovery)
 - `references/native_lib_file_inspect.md` (inspect `/data/app/.../lib/arm64/*.so` via adb/su)
+- `references/app_reinstall_workflow.md` (quick uninstall/reinstall checklist)

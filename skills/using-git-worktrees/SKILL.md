@@ -160,6 +160,12 @@ Ready to implement <feature-name>
 - **Problem:** Worktree contents get tracked, pollute git status
 - **Fix:** Always use `git check-ignore` before creating project-local worktree
 
+### Switching to a branch already checked out elsewhere
+
+- **Problem:** `fatal: '<branch>' is already used by worktree at '<path>'`
+- **Fix:** Prefer `git switch --detach <branch>` for read-only validation (compile/test), or switch the other worktree away first.
+- Reference: `references/branch-already-used-by-worktree.md`
+
 ### Assuming directory location
 
 - **Problem:** Creates inconsistency, violates project conventions

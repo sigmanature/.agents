@@ -5,10 +5,11 @@ import pty
 import select
 import shlex
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Iterable, List, Optional, Sequence, Tuple
+from typing import IO, Callable, Iterable, List, Optional, Sequence, Tuple
 
 
 def run(
@@ -244,6 +245,91 @@ def start_logcat(
     fh = logcat_path.open("w", encoding="utf-8")
     proc = subprocess.Popen(base + ["logcat", "-v", "threadtime", "-b", "all"], stdout=fh, stderr=subprocess.DEVNULL)
     return LogcatHandle(proc=proc, path=logcat_path, _fh=fh)
+
+
+@dataclass
+class LogcatStreamHandle:
+    """A logcat capture handle that can stream lines to a callback while saving to file."""
+
+    proc: subprocess.Popen
+    path: Path
+    _fh: IO[str]
+    _thread: threading.Thread
+    _stop_event: threading.Event
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(timeout=5)
+        try:
+            self._thread.join(timeout=5)
+        except Exception:
+            pass
+        try:
+            self._fh.close()
+        except Exception:
+            pass
+
+
+def start_logcat_stream(
+    serial: str,
+    out_dir: Path,
+    *,
+    clear_logcat: bool,
+    filename: str = "logcat_all_threadtime.txt",
+    line_callback: Optional[Callable[[str], None]] = None,
+    stop_event: Optional[threading.Event] = None,
+) -> LogcatStreamHandle:
+    """Start `adb logcat` and write to file, optionally streaming each line to callback.
+
+    This is useful when you want to detect log signatures (e.g., crashes) and stop early.
+    """
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    logcat_path = out_dir / filename
+    base = adb_base(serial)
+    if clear_logcat:
+        run(base + ["logcat", "-c"], timeout_s=20, check=False)
+
+    fh = logcat_path.open("w", encoding="utf-8")
+    proc = subprocess.Popen(
+        base + ["logcat", "-v", "threadtime", "-b", "all"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        bufsize=1,
+    )
+
+    internal_stop = threading.Event()
+    external_stop = stop_event
+
+    def _pump() -> None:
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                if internal_stop.is_set() or (external_stop is not None and external_stop.is_set()):
+                    break
+                fh.write(line)
+                if line_callback is not None:
+                    try:
+                        line_callback(line)
+                    except Exception:
+                        # Never let callback failures kill log capture.
+                        pass
+        finally:
+            try:
+                fh.flush()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_pump, name=f"logcat_stream_{serial}", daemon=True)
+    t.start()
+    return LogcatStreamHandle(proc=proc, path=logcat_path, _fh=fh, _thread=t, _stop_event=internal_stop)
 
 
 def stop_monkey_best_effort(serial: str) -> None:

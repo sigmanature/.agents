@@ -75,6 +75,8 @@ Pixel/Slider variant:
 - If the workspace uses `private/google-modules/soc/gs/build_slider.sh`, run it from the `pixel/` repo root, not from `private/google-modules/soc/gs/`.
 - Reason: the script executes `tools/bazel` via a cwd-relative path; invoking it from the subdirectory fails before compilation with `tools/bazel: No such file or directory`.
 - If Bazel dies during server startup with `channel not registered to an event loop`, classify it as a build-environment blocker first, not a source compile result. Capture the `out/bazel/.../server/jvm.out` path in the report.
+- For compile-only sanity checks, prefer `tools/bazel build ...` (not `build_slider.sh`, which is a `bazel run` wrapper). Reference: `references/pixel-slider-bazel-build.md`.
+- For “make a new Kconfig symbol land in boot.img via Kleaf fragments”, follow: `references/pixel-kleaf-config-fragment-bootimg.md`.
 
 ### Step 5: Run reproduction
 
@@ -122,6 +124,8 @@ Classify and act:
 ## References
 
 - [/home/nzzhao/.agents/skills/kernel-debug-orchestrator/references/f2fs-largefolio-gc-porting-playbook.md](/home/nzzhao/.agents/skills/kernel-debug-orchestrator/references/f2fs-largefolio-gc-porting-playbook.md)
+- `references/pixel-kleaf-config-fragment-bootimg.md` for wiring a new Kconfig symbol into `boot.img` in Pixel/Kleaf.
+- `references/git-cross-repo-porting-format-patch.md` for porting a commit across unrelated repos with `git format-patch` / `git am`.
 - `non-deterministic`: tighten repro and add ordering/state logs.
 
 Keep each iteration bounded; avoid broad logging expansion without evidence.

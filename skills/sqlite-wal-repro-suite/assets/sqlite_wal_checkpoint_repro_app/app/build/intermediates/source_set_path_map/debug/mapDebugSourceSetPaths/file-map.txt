@@ -1,0 +1,7 @@
+com.learnos.sqlitewalrepro.app-pngs-0 /home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/generated/res/pngs/debug
+com.learnos.sqlitewalrepro.app-resValues-1 /home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/generated/res/resValues/debug
+com.learnos.sqlitewalrepro.app-packageDebugResources-2 /home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/incremental/debug/packageDebugResources/merged.dir
+com.learnos.sqlitewalrepro.app-packageDebugResources-3 /home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/incremental/debug/packageDebugResources/stripped.dir
+com.learnos.sqlitewalrepro.app-debug-4 /home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/merged_res/debug/mergeDebugResources
+com.learnos.sqlitewalrepro.app-debug-5 /home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/src/debug/res
+com.learnos.sqlitewalrepro.app-main-6 /home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/src/main/res

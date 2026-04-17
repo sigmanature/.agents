@@ -1,0 +1,22 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.learnos.sqlitewalrepro"
+4    android:versionCode="1"
+5    android:versionName="1.0" >
+6
+7    <uses-sdk
+8        android:minSdkVersion="26"
+9        android:targetSdkVersion="34" />
+10
+11    <application
+11-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/src/main/AndroidManifest.xml:2:5-5:39
+12        android:allowBackup="false"
+12-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/src/main/AndroidManifest.xml:4:9-36
+13        android:debuggable="true"
+14        android:extractNativeLibs="false"
+15        android:label="sqlite_wal_repro"
+15-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/src/main/AndroidManifest.xml:3:9-41
+16        android:supportsRtl="false" />
+16-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/src/main/AndroidManifest.xml:5:9-36
+17
+18</manifest>

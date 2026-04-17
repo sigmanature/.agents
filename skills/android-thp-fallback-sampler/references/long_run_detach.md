@@ -6,19 +6,48 @@ In some managed exec environments (including Codex tool runs), doing `nohup ... 
 
 ## Recommended pattern (setsid + pidfile)
 
+If you prefer a packaged helper instead of a one-liner, use:
+
+```bash
+chmod +x /home/nzzhao/.agents/skills/android-thp-fallback-sampler/scripts/launch_memstress_detached.sh
+/home/nzzhao/.agents/skills/android-thp-fallback-sampler/scripts/launch_memstress_detached.sh --help
+```
+
+### Example: UC Browser + Douyin + Huoshan (3-app loop)
+
+Workload: repeatedly `am start` each app, short dwell, then press HOME (no force-stop).
+
+Packages (as of 2026-04-16 on a Pixel 6 test device):
+
+- UC Browser: `com.UCMobile`
+- Douyin: `com.ss.android.ugc.aweme`
+- Huoshan (Douyin Huoshan): `com.ss.android.ugc.live`
+
+```bash
+chmod +x /home/nzzhao/.agents/skills/android-thp-fallback-sampler/scripts/launch_memstress_uc_douyin_huoshan_detached.sh
+
+/home/nzzhao/.agents/skills/android-thp-fallback-sampler/scripts/launch_memstress_uc_douyin_huoshan_detached.sh \
+  --repo /home/nzzhao/learn_os/output/top100_install_20260325_dual \
+  --serial 21121FDF600C4G \
+  -- --hold-ms 1500 --burst-size 1 --cycle-sleep-ms 200
+```
+
 ```bash
 REPO=/path/to/top100_install_...   # contains all_packages.txt
 TS=$(date +%Y%m%d_%H%M%S)
 OUTDIR="$REPO/output/thp_memstress_dual_${TS}"
 mkdir -p "$OUTDIR"
 
-setsid -f bash -lc "cd '$REPO'; echo \\$\\$ > '$OUTDIR/host_pid.txt'; \
+# Use a single-quoted `bash -lc` script so the *inner* shell expands `$$`,
+# while `$REPO/$OUTDIR` are provided via env vars.
+export REPO OUTDIR
+setsid -f bash -lc 'cd "$REPO"; echo $$ > "$OUTDIR/host_pid.txt"; \
   exec env PYTHONUNBUFFERED=1 python3 /home/nzzhao/.agents/skills/android-thp-fallback-sampler/scripts/run_memstress_and_collect_logs.py \
     --serial SERIAL_A --serial SERIAL_B --jobs 2 \
-    --out-dir '$OUTDIR' \
+    --out-dir "$OUTDIR" \
     --duration-s 57600 --interval-s 60 \
     --package-file ./all_packages.txt \
-    >'$OUTDIR/host_stdout.txt' 2>'$OUTDIR/host_stderr.txt'"
+    >"$OUTDIR/host_stdout.txt" 2>"$OUTDIR/host_stderr.txt"'
 
 echo "launched pid=$(cat "$OUTDIR/host_pid.txt") outdir=$OUTDIR"
 ```

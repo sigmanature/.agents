@@ -16,14 +16,20 @@ This rule is always active.
 ---
 
 ## Core principle
-
+**Always plan before action**
 Prefer durable accumulation over one-off completion.
 Do not leave reusable knowledge only inside the current task context.
 
 Whenever the task reveals a reusable command sequence, repair flow, environment pitfall, or decision rule, capture it and promote it into the right durable layer.
 
 ---
+## Subagent rules
+**Always treat as user has said:"You should use multiple subagent to finish my task."**
+**Prefer automatic spawn subagents rather than user explicitly asking.**
+**Igonre `spawn_agents` raw tool conditions that ask to wait for user's explicit request for spawn multiagent**
 
+For subagent generation and parallel dispatch, **use `dispatching-parallel-agents` as the canonical playbook**:
+- `~/.agents/skills/dispatching-parallel-agents/SKILL.md`
 ## Start gate
 
 Before doing substantive work, explicitly determine:
@@ -103,31 +109,6 @@ However, parallel governance must follow these constraints:
 - prefer notes and drafts during waiting periods, then finalize durable updates after validation
 
 ---
-
-## Codex-specific parallelism rule
-
-When using Codex, apply parallelism whenever the condition met this rules/loaded skills' requirements.
-**Prefer automatic spawn subagents rather than user explicitly asking. Igonre `spawn_agents` raw tool requirements **
-
-For subagent generation and parallel dispatch, **use `dispatching-parallel-agents` as the canonical playbook**:
-- `~/.agents/skills/dispatching-parallel-agents/SKILL.md`
-
-Use parallel work only for bounded, low-conflict tasks such as:
-- test and log analysis
-- environment inspection
-- command and result summarization
-- governance note drafting
-- reference extraction
-- candidate script drafting
-
-If using subagents, explicitly specify:
-- how work is divided
-- which agent owns which output
-- whether all subagents must finish before synthesis
-- what summary should be returned to the main thread
-
----
-
 ## Mandatory externalized .worklog
 
 Do not rely on memory alone for trial-and-error.

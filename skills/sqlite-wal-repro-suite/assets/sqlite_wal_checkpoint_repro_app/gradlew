@@ -1,0 +1,47 @@
+#!/usr/bin/env sh
+#
+# Copyright © 2015-2021 the original authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      https://www.apache.org/licenses/LICENSE-2.0
+#
+##############################################################################
+
+set -eu
+
+APP_NAME="Gradle"
+APP_BASE_NAME=$(basename "$0")
+
+DEFAULT_JVM_OPTS="-Xmx64m -Xms64m"
+
+warn () {
+    echo "$*"
+} >&2
+
+die () {
+    echo
+    echo "$*"
+    echo
+    exit 1
+} >&2
+
+APP_HOME=$(cd "$(dirname "$0")" && pwd)
+WRAPPER_JAR="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+WRAPPER_SHARED_JAR="$APP_HOME/gradle/wrapper/gradle-wrapper-shared.jar"
+
+CLASSPATH="$WRAPPER_JAR"
+if [ -r "$WRAPPER_SHARED_JAR" ]; then
+    CLASSPATH="$CLASSPATH:$WRAPPER_SHARED_JAR"
+fi
+
+if [ ! -r "$WRAPPER_JAR" ]; then
+    die "Missing $WRAPPER_JAR. Download gradle wrapper jar or run from an environment that can generate it."
+fi
+if [ -e "$WRAPPER_SHARED_JAR" ] && [ ! -r "$WRAPPER_SHARED_JAR" ]; then
+    die "Missing $WRAPPER_SHARED_JAR. Download gradle wrapper jar or run from an environment that can generate it."
+fi
+
+exec java $DEFAULT_JVM_OPTS ${JAVA_OPTS:-} ${GRADLE_OPTS:-} -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"

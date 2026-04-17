@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
 import signal
 import sys
 import threading
@@ -68,6 +69,9 @@ CONFIG = {
         "hold_ms": 200,
         "launch_gap_ms": 350,
         "cycle_sleep_ms": 1000,
+        # Optional: treat cycles as "rounds", and force-stop all target packages at each round boundary.
+        # 0 disables this mode.
+        "round_s": 0,
         "seed": 12345,
         "clear_logcat": True,
     },
@@ -128,6 +132,23 @@ def exit_to_home(serial: str):
         return cp
     # Fallback: explicitly start HOME.
     return adb_shell_cp(serial, "am start -a android.intent.action.MAIN -c android.intent.category.HOME", timeout_s=20, check=False)
+
+
+def force_stop_packages(serial: str, pkgs: Sequence[str]) -> List[Dict]:
+    """Best-effort `am force-stop` for each pkg; returns per-pkg results for logging."""
+
+    results: List[Dict] = []
+    for pkg in pkgs:
+        cp = adb_shell_cp(serial, f"am force-stop {pkg}", timeout_s=20, check=False)
+        results.append(
+            {
+                "package": pkg,
+                "returncode": cp.returncode,
+                "stdout_tail": (cp.stdout or "").strip()[-200:],
+                "stderr_tail": (cp.stderr or "").strip()[-200:],
+            }
+        )
+    return results
 
 
 def maybe_sleep(ms: int, deadline: Optional[float]) -> None:
@@ -260,6 +281,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     p.add_argument("--launch-gap-ms", type=int, default=CONFIG["memstress"]["launch_gap_ms"])
     p.add_argument("--cycle-sleep-ms", type=int, default=CONFIG["memstress"]["cycle_sleep_ms"])
+    p.add_argument(
+        "--round-s",
+        type=int,
+        default=CONFIG["memstress"]["round_s"],
+        help="If >0, treat memstress cycles as rounds of ~this duration; at each round boundary force-stop all target packages, then continue immediately.",
+    )
     p.add_argument("--seed", type=int, default=CONFIG["memstress"]["seed"], help="Deterministic seed")
     p.add_argument(
         "--clear-logcat",
@@ -286,6 +313,7 @@ def run_one_device(
     memstress_out.mkdir(parents=True, exist_ok=True)
 
     duration_s = max(1, int(args.duration_s))
+    round_s = max(0, int(args.round_s))
     counters = [x.strip() for x in str(args.counters).split(",") if x.strip()]
     setup_cmds = CONFIG["setup_shell"] if args.setup_shell is None else list(args.setup_shell)
 
@@ -339,6 +367,7 @@ def run_one_device(
                 "hold_ms": int(args.hold_ms),
                 "launch_gap_ms": int(args.launch_gap_ms),
                 "cycle_sleep_ms": int(args.cycle_sleep_ms),
+                "round_s": round_s,
                 "seed": int(args.seed),
                 "clear_logcat": bool(args.clear_logcat),
             },
@@ -438,9 +467,71 @@ def run_one_device(
         sampler_thread = threading.Thread(target=_sampler, name=f"thp_sampler_{serial}", daemon=True)
         sampler_thread.start()
 
-        from utils.adb_utils import start_logcat
+        crash_signature_event = threading.Event()
+        crash_signature_path = memstress_out / "crash_signature.json"
+        crash_context: Deque[str] = deque(maxlen=200)
 
-        logcat = start_logcat(serial, memstress_out, clear_logcat=bool(args.clear_logcat))
+        cnfe_re = re.compile(r"(ClassNotFoundException|NoClassDefFoundError|ClassNotFoundError)")
+        am_crash_re = re.compile(r"\bam_crash\b")
+        fatal_re = re.compile(r"FATAL EXCEPTION")
+
+        window_lines = 500
+        win_am_crash = 0
+        win_fatal = 0
+        win_cnfe = 0
+
+        def _on_logcat_line(line: str) -> None:
+            nonlocal win_am_crash, win_fatal, win_cnfe
+            if crash_signature_event.is_set():
+                return
+
+            s = line.rstrip("\\n")
+            crash_context.append(s)
+
+            saw_cnfe = cnfe_re.search(s) is not None
+            saw_am_crash = am_crash_re.search(s) is not None
+            saw_fatal = fatal_re.search(s) is not None
+
+            if saw_am_crash:
+                win_am_crash = window_lines
+            if saw_fatal:
+                win_fatal = window_lines
+            if saw_cnfe:
+                win_cnfe = window_lines
+
+            confirmed = (saw_cnfe and (win_am_crash > 0 or win_fatal > 0)) or (saw_am_crash and win_cnfe > 0)
+            if confirmed:
+                payload = {
+                    "serial": serial,
+                    "host_ts": int(time.time()),
+                    "reason": "am_crash + (ClassNotFoundException|NoClassDefFoundError|ClassNotFoundError) in proximity",
+                    "window_lines": window_lines,
+                    "matched_line": s,
+                    "context_tail": list(crash_context),
+                }
+                try:
+                    crash_signature_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                except Exception:
+                    pass
+                crash_signature_event.set()
+                stop_event.set()
+
+            if win_am_crash > 0:
+                win_am_crash -= 1
+            if win_fatal > 0:
+                win_fatal -= 1
+            if win_cnfe > 0:
+                win_cnfe -= 1
+
+        from utils.adb_utils import start_logcat_stream
+
+        logcat = start_logcat_stream(
+            serial,
+            memstress_out,
+            clear_logcat=bool(args.clear_logcat),
+            line_callback=_on_logcat_line,
+            stop_event=stop_event,
+        )
 
         cycle_log_f = (memstress_out / "cycle_log.jsonl").open("w", encoding="utf-8")
         try:
@@ -461,8 +552,10 @@ def run_one_device(
             heavy_pool: Deque[str] = deque(heavy_pool_list)
 
             cycle = 0
+            rounds = 1
             launched_total = 0
             deadline = time.time() + duration_s
+            round_start = time.time()
 
             manifest["status"] = "running"
             write_run_manifest(out_dir / "run_manifest.json", manifest)
@@ -470,6 +563,17 @@ def run_one_device(
             while not stop.is_set():
                 if time.time() >= deadline:
                     break
+                if round_s > 0 and (time.time() - round_start) >= float(round_s):
+                    boundary_row = {
+                        "event": "round_boundary",
+                        "round": rounds,
+                        "host_ts": int(time.time()),
+                        "force_stop": force_stop_packages(serial, runnable_pkgs),
+                    }
+                    cycle_log_f.write(json.dumps(boundary_row, ensure_ascii=False) + "\n")
+                    cycle_log_f.flush()
+                    rounds += 1
+                    round_start = time.time()
 
                 cycle += 1
                 chosen: List[str] = []
@@ -536,10 +640,12 @@ def run_one_device(
             summary = {
                 "serial": serial,
                 "cycles": cycle,
+                "rounds": rounds,
                 "launched_total": launched_total,
                 "runnable_packages": len(runnable_pkgs),
                 "heavy_packages": inferred_heavy,
                 "stopped_by_signal": stop_event.is_set(),
+                "crash_signature_found": crash_signature_event.is_set(),
             }
             (memstress_out / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             print(json.dumps(summary, ensure_ascii=False))
@@ -565,7 +671,10 @@ def run_one_device(
 
         run_derive_metrics(scripts_dir=scripts_dir, out_dir=out_dir)
 
-        manifest["status"] = "finished" if not stop_event.is_set() else "stopped"
+        if crash_signature_event.is_set():
+            manifest["status"] = "crash_signature_found"
+        else:
+            manifest["status"] = "finished" if not stop_event.is_set() else "stopped"
         manifest["end_host_ts"] = int(time.time())
         write_run_manifest(out_dir / "run_manifest.json", manifest)
 

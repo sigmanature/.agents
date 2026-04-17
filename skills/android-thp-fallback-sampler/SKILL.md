@@ -199,6 +199,8 @@ python3 scripts/run_memstress_and_collect_logs.py \
 
 - `scripts/run_monkey.py`：跑采样 + monkey（logcat + monkey stdout/stderr + dumpsys）
 - `scripts/run_memstress_and_collect_logs.py`：跑采样 + memstress（logcat + cycle log + dumpsys）
+- `scripts/launch_memstress_detached.sh`：可靠后台启动 memstress（setsid + pidfile + stdout/stderr）
+- `scripts/launch_memstress_uc_douyin_huoshan_detached.sh`：三 app 循环一键后台启动（UC + 抖音 + 火山）
 - `scripts/plot_derived_svg.py`：把 `derived.csv` 画成 `SVG`（无 matplotlib/pandas 依赖；支持多设备多曲线）
 - `scripts/watch_live_plot.py`：长测期间定期从 `raw_samples.csv` 生成临时 `derived.csv` 并更新对比 `SVG`（`latest/` + `archive/`）
 
