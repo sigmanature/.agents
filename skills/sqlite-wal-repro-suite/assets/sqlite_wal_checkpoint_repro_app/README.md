@@ -49,6 +49,37 @@ adb shell am instrument -w -r \\
   com.learnos.sqlitewalrepro.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
+Checkpoint-dense mode (tiny transactions + dedicated checkpointer thread):
+
+```bash
+adb shell am instrument -w -r \\
+  -e seconds 600 \\
+  -e writers 1 \\
+  -e readers 0 \\
+  -e checkpoint TRUNCATE \\
+  -e synchronous FULL \\
+  -e updatesPerTxn 1 \\
+  -e blobBytes 1024 \\
+  -e rows 256 \\
+  -e checkEvery 200 \\
+  -e checkpointThread 1 \\
+  -e checkpointEveryIters 1 \\
+  -e checkpointBurst 1 \\
+  -e checkpointSleepMs 0 \\
+  -e patternSample 10 \\
+  com.learnos.sqlitewalrepro.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+This mode logs `phase=CKPT` rows from thread `wal-checkpointer` with:
+
+- `busy`
+- `log_frames`
+- `checkpointed_frames`
+- `db_size_before` / `db_size_after`
+- `wal_size_before` / `wal_size_after`
+- `shm_size_before` / `shm_size_after`
+- `duration_ns`
+
 More stress (multiple writers + readers):
 
 ```bash

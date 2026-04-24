@@ -1,7 +1,7 @@
 {
     "logs": [
         {
-            "outputFile": "com.learnos.sqlitewalrepro.test.app-debugAndroidTest-5:/values-v28_values-v28.arsc.flat",
+            "outputFile": "com.learnos.sqlitewalrepro.test.app-debugAndroidTest-3:/values-v28_values-v28.arsc.flat",
             "map": [
                 {
                     "source": "/home/nzzhao/.gradle/caches/transforms-4/1e2c9ea3966460afaa39ffb67aca3e9a/transformed/core-1.5.0/res/values-v28/values.xml",
@@ -25,31 +25,7 @@
             ]
         },
         {
-            "outputFile": "com.learnos.sqlitewalrepro.test.app-debugAndroidTest-5:/values_values.arsc.flat",
-            "map": [
-                {
-                    "source": "/home/nzzhao/.gradle/caches/transforms-4/1e2c9ea3966460afaa39ffb67aca3e9a/transformed/core-1.5.0/res/values/values.xml",
-                    "from": {
-                        "startLines": "4,11",
-                        "startColumns": "0,0",
-                        "startOffsets": "176,544",
-                        "endLines": "10,17",
-                        "endColumns": "8,8",
-                        "endOffsets": "543,909"
-                    },
-                    "to": {
-                        "startLines": "2,9",
-                        "startColumns": "4,4",
-                        "startOffsets": "55,427",
-                        "endLines": "8,15",
-                        "endColumns": "8,8",
-                        "endOffsets": "422,792"
-                    }
-                }
-            ]
-        },
-        {
-            "outputFile": "com.learnos.sqlitewalrepro.test.app-debugAndroidTest-5:/values-v18_values-v18.arsc.flat",
+            "outputFile": "com.learnos.sqlitewalrepro.test.app-debugAndroidTest-3:/values-v18_values-v18.arsc.flat",
             "map": [
                 {
                     "source": "/home/nzzhao/.gradle/caches/transforms-4/1e2c9ea3966460afaa39ffb67aca3e9a/transformed/core-1.5.0/res/values-v18/values.xml",
@@ -73,7 +49,31 @@
             ]
         },
         {
-            "outputFile": "com.learnos.sqlitewalrepro.test.app-debugAndroidTest-5:/values-v21_values-v21.arsc.flat",
+            "outputFile": "com.learnos.sqlitewalrepro.test.app-debugAndroidTest-3:/values_values.arsc.flat",
+            "map": [
+                {
+                    "source": "/home/nzzhao/.gradle/caches/transforms-4/1e2c9ea3966460afaa39ffb67aca3e9a/transformed/core-1.5.0/res/values/values.xml",
+                    "from": {
+                        "startLines": "4,11",
+                        "startColumns": "0,0",
+                        "startOffsets": "176,544",
+                        "endLines": "10,17",
+                        "endColumns": "8,8",
+                        "endOffsets": "543,909"
+                    },
+                    "to": {
+                        "startLines": "2,9",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,427",
+                        "endLines": "8,15",
+                        "endColumns": "8,8",
+                        "endOffsets": "422,792"
+                    }
+                }
+            ]
+        },
+        {
+            "outputFile": "com.learnos.sqlitewalrepro.test.app-debugAndroidTest-3:/values-v21_values-v21.arsc.flat",
             "map": [
                 {
                     "source": "/home/nzzhao/.gradle/caches/transforms-4/1e2c9ea3966460afaa39ffb67aca3e9a/transformed/core-1.5.0/res/values-v21/values.xml",

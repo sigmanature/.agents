@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import re
 import signal
 import sys
 import threading
@@ -28,8 +27,10 @@ from pathlib import Path
 from typing import Deque, Dict, List, Optional, Sequence, Set, Tuple
 
 from utils.adb_utils import adb_shell_cp, ensure_adb_works, resolve_serials
+from utils.crash_signature import TargetCrashSignatureDetector
 from utils.device_prep import ensure_awake_unlocked_and_stay_awake
 from utils.experiment_utils import ensure_out_dir, maybe_install_apks, run_setup_cmds
+from utils.oat_watch import DEFAULT_DELETE_EXTS, resolve_oat_watch_packages, watch_loop
 from utils.pkg_utils import read_package_file, unique_preserve_order
 from utils.sampling_utils import DEFAULT_COUNTERS, DEFAULT_STATS_DIR, run_derive_metrics, sample_loop, write_run_manifest
 from utils.thp_utils import ensure_thp_mode_for_stats
@@ -294,6 +295,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=CONFIG["memstress"]["clear_logcat"],
         help="Clear logcat before starting workload/log collection",
     )
+    p.add_argument("--oat-prune-watch", action="store_true", help="Poll target packages and delete regenerated oat/odex/vdex/art")
+    p.add_argument("--oat-prune-package", action="append", default=None, help="Explicit package to watch for oat pruning (repeatable)")
+    p.add_argument("--oat-prune-package-file", default=None, help="File with packages to watch for oat pruning")
+    p.add_argument("--oat-prune-poll-s", type=float, default=2.0, help="OAT prune poll interval seconds (default: 2.0)")
 
     p.add_argument("--sample-retries", type=int, default=CONFIG["sample_retries"], help="Sampling retries per tick")
     p.add_argument("--sample-retry-sleep-s", type=int, default=CONFIG["sample_retry_sleep_s"], help="Sleep seconds between sampling retries")
@@ -371,6 +376,13 @@ def run_one_device(
                 "seed": int(args.seed),
                 "clear_logcat": bool(args.clear_logcat),
             },
+            "oat_prune_watch": {
+                "enabled": bool(args.oat_prune_watch),
+                "explicit_packages": list(args.oat_prune_package or []),
+                "package_file": args.oat_prune_package_file,
+                "poll_s": float(args.oat_prune_poll_s),
+                "exts": list(DEFAULT_DELETE_EXTS),
+            },
         },
         "samples": 0,
         "sample_errors": 0,
@@ -440,6 +452,17 @@ def run_one_device(
             "skipped_unresolved": unresolved,
             "resolved_activities": resolved,
         }
+        oat_watch_targets = resolve_oat_watch_packages(
+            default_packages=valid_pkgs,
+            explicit_packages=list(args.oat_prune_package or []),
+            file_packages=read_package_file(args.oat_prune_package_file),
+        )
+        oat_watch_targets = [pkg for pkg in oat_watch_targets if pkg in valid_pkgs]
+        manifest["oat_prune_watch_resolved"] = {
+            "enabled": bool(args.oat_prune_watch),
+            "packages": oat_watch_targets,
+            "poll_s": float(args.oat_prune_poll_s),
+        }
         write_run_manifest(out_dir / "run_manifest.json", manifest)
 
         sampling_result = SamplingResult()
@@ -469,59 +492,24 @@ def run_one_device(
 
         crash_signature_event = threading.Event()
         crash_signature_path = memstress_out / "crash_signature.json"
-        crash_context: Deque[str] = deque(maxlen=200)
-
-        cnfe_re = re.compile(r"(ClassNotFoundException|NoClassDefFoundError|ClassNotFoundError)")
-        am_crash_re = re.compile(r"\bam_crash\b")
-        fatal_re = re.compile(r"FATAL EXCEPTION")
-
-        window_lines = 500
-        win_am_crash = 0
-        win_fatal = 0
-        win_cnfe = 0
+        crash_detector = TargetCrashSignatureDetector(
+            serial=serial,
+            target_packages=runnable_pkgs,
+            window_lines=500,
+        )
 
         def _on_logcat_line(line: str) -> None:
-            nonlocal win_am_crash, win_fatal, win_cnfe
             if crash_signature_event.is_set():
                 return
 
-            s = line.rstrip("\\n")
-            crash_context.append(s)
-
-            saw_cnfe = cnfe_re.search(s) is not None
-            saw_am_crash = am_crash_re.search(s) is not None
-            saw_fatal = fatal_re.search(s) is not None
-
-            if saw_am_crash:
-                win_am_crash = window_lines
-            if saw_fatal:
-                win_fatal = window_lines
-            if saw_cnfe:
-                win_cnfe = window_lines
-
-            confirmed = (saw_cnfe and (win_am_crash > 0 or win_fatal > 0)) or (saw_am_crash and win_cnfe > 0)
-            if confirmed:
-                payload = {
-                    "serial": serial,
-                    "host_ts": int(time.time()),
-                    "reason": "am_crash + (ClassNotFoundException|NoClassDefFoundError|ClassNotFoundError) in proximity",
-                    "window_lines": window_lines,
-                    "matched_line": s,
-                    "context_tail": list(crash_context),
-                }
+            payload = crash_detector.process_line(line)
+            if payload is not None:
                 try:
-                    crash_signature_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                    crash_detector.write_payload(crash_signature_path, payload)
                 except Exception:
                     pass
                 crash_signature_event.set()
                 stop_event.set()
-
-            if win_am_crash > 0:
-                win_am_crash -= 1
-            if win_fatal > 0:
-                win_fatal -= 1
-            if win_cnfe > 0:
-                win_cnfe -= 1
 
         from utils.adb_utils import start_logcat_stream
 
@@ -532,6 +520,23 @@ def run_one_device(
             line_callback=_on_logcat_line,
             stop_event=stop_event,
         )
+        oat_watch_thread: Optional[threading.Thread] = None
+        if bool(args.oat_prune_watch) and oat_watch_targets:
+            oat_watch_thread = threading.Thread(
+                target=watch_loop,
+                kwargs={
+                    "serial": serial,
+                    "packages": oat_watch_targets,
+                    "out_dir": memstress_out / "oat_watch",
+                    "stop_event": stop,
+                    "poll_s": float(args.oat_prune_poll_s),
+                    "use_su": bool(args.use_su),
+                    "exts": DEFAULT_DELETE_EXTS,
+                },
+                name=f"oat_watch_{serial}",
+                daemon=True,
+            )
+            oat_watch_thread.start()
 
         cycle_log_f = (memstress_out / "cycle_log.jsonl").open("w", encoding="utf-8")
         try:
@@ -661,6 +666,8 @@ def run_one_device(
 
         # Stop this device's sampler thread (do NOT stop other devices).
         local_stop_event.set()
+        if oat_watch_thread is not None:
+            oat_watch_thread.join(timeout=max(5.0, float(args.oat_prune_poll_s) * 2.0))
         sampler_thread.join(timeout=30)
         if sampling_result.exc:
             raise RuntimeError(f"sampling thread failed: {sampling_result.exc}")

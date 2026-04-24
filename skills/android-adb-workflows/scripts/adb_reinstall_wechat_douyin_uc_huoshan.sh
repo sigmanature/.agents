@@ -88,10 +88,10 @@ pick_apk() {
   [[ -n "$best" ]] && echo "$best"
 }
 
-wechat_apk="$(pick_apk 'com\\.tencent\\.mm|weixin' || true)"
-uc_apk="$(pick_apk 'com\\.ucmobile|ucmobile|ucbrowser' || true)"
-douyin_apk="$(pick_apk 'com\\.ss\\.android\\.ugc\\.aweme' || true)"
-huoshan_apk="$(pick_apk 'com\\.ss\\.android\\.ugc\\.live|huoshan|hotsoon' || true)"
+wechat_apk="$(pick_apk '(^|/)weixin[^/]*\.apk$|com\.tencent\.mm|weixin' || true)"
+uc_apk="$(pick_apk '(^|/)com\.UCMobile\.apk$|com\.ucmobile|ucmobile|ucbrowser' || true)"
+douyin_apk="$(pick_apk '(^|/)com\.ss\.android\.ugc\.aweme\.apk$' || true)"
+huoshan_apk="$(pick_apk '(^|/)com\.ss\.android\.ugc\.live\.apk$|(^|/).*huoshan.*\.apk$|(^|/).*hotsoon.*\.apk$' || true)"
 
 missing=0
 [[ -z "$wechat_apk" ]] && echo "WeChat APK not found under $BASE_DIR" >&2 && missing=1

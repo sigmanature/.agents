@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.learnos.sqlitewalrepro.ReproArgsDenseModeTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-04-19T07:13:18" hostname="nzzhao-ThinkCentre-M760t" time="2.096">
+  <properties/>
+  <testcase name="defaultsRemainBackwardCompatible" classname="com.learnos.sqlitewalrepro.ReproArgsDenseModeTest" time="1.998"/>
+  <testcase name="startGateAndSnapshotArgsAreParsed" classname="com.learnos.sqlitewalrepro.ReproArgsDenseModeTest" time="0.034"/>
+  <testcase name="denseCheckpointArgsAreParsedAndClamped" classname="com.learnos.sqlitewalrepro.ReproArgsDenseModeTest" time="0.03"/>
+  <testcase name="mixedWriteArgsAreParsedAndClamped" classname="com.learnos.sqlitewalrepro.ReproArgsDenseModeTest" time="0.032"/>
+  <system-out><![CDATA[WARNING: No manifest file found at ./AndroidManifest.xml.
+Falling back to the Android OS resources only.
+To remove this warning, annotate your test class with @Config(manifest=Config.NONE).
+]]></system-out>
+  <system-err><![CDATA[No such manifest file: ./AndroidManifest.xml
+]]></system-err>
+</testsuite>

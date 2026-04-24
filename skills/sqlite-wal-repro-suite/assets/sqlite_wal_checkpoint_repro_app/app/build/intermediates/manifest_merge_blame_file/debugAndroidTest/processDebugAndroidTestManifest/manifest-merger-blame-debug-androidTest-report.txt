@@ -3,24 +3,24 @@
 3    package="com.learnos.sqlitewalrepro.test" >
 4
 5    <uses-sdk
-5-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest6080722537974993453.xml:5:5-7:41
+5-->/home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest9199561786816977700.xml:5:5-7:41
 6        android:minSdkVersion="26"
-6-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest6080722537974993453.xml:6:9-35
+6-->/home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest9199561786816977700.xml:6:9-35
 7        android:targetSdkVersion="34" />
-7-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest6080722537974993453.xml:7:9-38
+7-->/home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest9199561786816977700.xml:7:9-38
 8
 9    <instrumentation
-9-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest6080722537974993453.xml:9:5-14:62
+9-->/home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest9199561786816977700.xml:9:5-14:62
 10        android:name="androidx.test.runner.AndroidJUnitRunner"
-10-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest6080722537974993453.xml:10:9-63
+10-->/home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest9199561786816977700.xml:10:9-63
 11        android:functionalTest="false"
-11-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest6080722537974993453.xml:11:9-39
+11-->/home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest9199561786816977700.xml:11:9-39
 12        android:handleProfiling="false"
-12-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest6080722537974993453.xml:12:9-40
+12-->/home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest9199561786816977700.xml:12:9-40
 13        android:label="Tests for com.learnos.sqlitewalrepro"
-13-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest6080722537974993453.xml:13:9-61
+13-->/home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest9199561786816977700.xml:13:9-61
 14        android:targetPackage="com.learnos.sqlitewalrepro" />
-14-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest6080722537974993453.xml:14:9-59
+14-->/home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest9199561786816977700.xml:14:9-59
 15
 16    <queries>
 16-->[androidx.test:runner:1.5.2] /home/nzzhao/.gradle/caches/transforms-4/66439c1c1be019eb49015aaa5f3ec576/transformed/runner-1.5.2/AndroidManifest.xml:24:5-28:15
@@ -40,12 +40,12 @@
 22-->[androidx.test:core:1.5.0] /home/nzzhao/.gradle/caches/transforms-4/1e2c9ea3966460afaa39ffb67aca3e9a/transformed/core-1.5.0/AndroidManifest.xml:24:22-69
 23
 24    <application
-24-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest6080722537974993453.xml:16:5-18:19
+24-->/home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest9199561786816977700.xml:16:5-18:19
 25        android:debuggable="true"
 26        android:extractNativeLibs="false" >
 27        <uses-library android:name="android.test.runner" />
-27-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest6080722537974993453.xml:17:9-60
-27-->/home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest6080722537974993453.xml:17:23-57
+27-->/home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest9199561786816977700.xml:17:9-60
+27-->/home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/tmp/manifest/androidTest/debug/tempFile2ProcessTestManifest9199561786816977700.xml:17:23-57
 28
 29        <activity
 29-->[androidx.test:core:1.5.0] /home/nzzhao/.gradle/caches/transforms-4/1e2c9ea3966460afaa39ffb67aca3e9a/transformed/core-1.5.0/AndroidManifest.xml:27:9-34:20

@@ -23,6 +23,7 @@ Use `simpleperf` as the default answer for Android kernel CPU profiling. Use `Pe
    - **Need kernel hotspots or call stacks** -> `simpleperf record -g` and `report_html.py`.
    - **Need scheduling / blocking / tracepoints / f2fs timeline** -> `Perfetto`.
    - **Need to prove a specific F2FS ioctl path ran** -> use tracefs/kprobes/strace recipes in `references/f2fs-atomic-write-evidence.md`.
+   - **Need oat/vdex write+rename syscall sequence** -> use tracefs/Perfetto/eBPF recipe in `references/oat-vdex-syscall-capture.md`.
    - **Need Linux-perf parity** -> explain native `perf` as optional and higher friction.
 
 3. Explain host/device placement clearly:
@@ -39,6 +40,7 @@ Use `simpleperf` as the default answer for Android kernel CPU profiling. Use `Pe
    - For AOSP or common-kernel output layout: `references/aosp-kernel-layout.md`
    - For `binary_cache_builder.py`, `vmlinux`, `.ko`, source code, and disassembly: `references/simpleperf-symbolization.md`
    - For command recipes and pitfalls: `references/recipes.md`
+   - For oat/vdex write+rename syscall capture: `references/oat-vdex-syscall-capture.md`
 
 ## Answer style
 

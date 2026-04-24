@@ -66,6 +66,49 @@ After reloading the shell, `codex -p high` still works, but it flows through the
   - `~/.codex/auth.json.plaintext.bak.YYYYMMDD_HHMMSS`
 - Keep it only as a rollback backup until the new path is verified.
 
+## Rotating the API key later
+
+### 1. Keyring-backed setups
+- Update the stored credential in the system keyring.
+- Keep `~/.codex/config.toml` pointed at the same provider and `env_key` unless the provider itself changed.
+- Relaunch Codex and verify the new credential works before removing any old backups or revoking the old key.
+
+### 2. Encrypted-file plus wrapper setups
+- If the provider and `env_key` stay the same, do not edit `~/.codex/config.toml` or the shell wrapper. Replace only the encrypted key file.
+- Back up the current encrypted file first:
+
+```bash
+cp ~/.codex/auth.key.enc ~/.codex/auth.key.enc.bak.$(date +%Y%m%d_%H%M%S)
+```
+
+- Rebuild the encrypted file from a temporary JSON source without putting the new key into shell history:
+
+```bash
+tmp_json="$(mktemp)"
+chmod 600 "$tmp_json"
+trap 'rm -f "$tmp_json"; unset NEW_KEY' EXIT
+
+read -r -s -p "New API key: " NEW_KEY
+echo
+jq -n --arg key "$NEW_KEY" '{OPENAI_API_KEY: $key}' > "$tmp_json"
+unset NEW_KEY
+
+bash /home/nzzhao/.agents/skills/codex-auth-secure-launch/scripts/codex_secure_launch.sh init \
+  --source "$tmp_json" \
+  --output ~/.codex/auth.key.enc
+
+rm -f "$tmp_json"
+trap - EXIT
+```
+
+- `init` prompts for the encryption passphrase. Reuse the old passphrase if you want the same unlock experience, or enter a new one if you also want to rotate the passphrase.
+- Validate the normal wrapper path after rotation, for example by running `codex -p high` and confirming the prompt path still works.
+- If validation fails, restore the backup encrypted file and re-check the provider name, `env_key`, and wrapper arguments.
+
+### 3. When config changes are actually required
+- Update `~/.codex/config.toml` and the shell wrapper only if the provider changed, the environment variable name changed, or the encrypted file path changed.
+- Replacing the raw API key alone should not require config edits in a stable `mify` plus `MIFY_API_KEY` setup.
+
 ## Limits
 - This protects the secret at rest.
 - Once Codex is launched, the decrypted key still exists in the launched process environment.

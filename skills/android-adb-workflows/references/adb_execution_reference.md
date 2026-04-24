@@ -49,6 +49,14 @@ Root detection (non-interactive):
 adb shell 'command -v su >/dev/null 2>&1 && su -c id >/dev/null 2>&1' && echo "su ok" || echo "no su"
 ```
 
+If the device is Magisk-rooted and a compound command still behaves like part of the pipeline ran unprivileged, prefer an explicit root shell form:
+
+```bash
+adb shell 'su 0 sh -c "rm -f /data/dalvik-cache/arm64/example.vdex"'
+```
+
+This is especially useful for `rm`, `mv`, loops, and pipelines where quoting mistakes can silently leave part of the command outside the root shell.
+
 ### 3) `run-as <package>` (no root, app-private files)
 If the app is debuggable, `run-as` can read `/data/data/<pkg>/...`.
 
@@ -68,6 +76,12 @@ Because `su -c` runs **one command string**, and you still want the device shell
 
 ```bash
 adb shell su -c 'sh -c "dmesg | tail -n 200 > /data/local/tmp/dmesg_tail.txt"'
+```
+
+On some Magisk setups, the explicit-UID variant is more robust for write/delete flows:
+
+```bash
+adb shell 'su 0 sh -c "ls -1 /data/dalvik-cache/arm64 | grep Settings | while read f; do rm -f /data/dalvik-cache/arm64/$f; done"'
 ```
 
 ### Rule C: keep quoting simple
@@ -198,6 +212,42 @@ adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActi
 ```bash
 adb shell pm path com.example.app
 ```
+
+### Compare one package's `base.apk` bytes across two devices
+
+Prefer hashing the host-side byte stream from `adb exec-out`, so you compare the exact file contents without relying on device-side hash tooling:
+
+```bash
+SER=DEVICE_SERIAL
+P=$(adb -s "$SER" shell pm path com.example.app | tr -d '\r' | sed -n 's/^package://p' | grep '/base\.apk$' | head -n1)
+adb -s "$SER" exec-out sh -c "cat '$P'" | sha256sum
+```
+
+For two devices, run the same sequence once per serial and compare the resulting hashes.
+
+Notes:
+- prefer `grep '/base\.apk$'` so split APK paths are not mistaken for the base package
+- this usually does not need root because installed APK files are world-readable on standard Android package paths
+- if hashes match, the on-disk `base.apk` byte content matches; this says nothing about oat/vdex/art artifacts
+
+### Compare one package's `oat/*.odex` and `oat/*.vdex` across two devices
+
+For app-compiled artifacts under `/data/app/.../oat`, first discover the app install directory from `base.apk`, then hash each oat artifact by relative path:
+
+```bash
+SER=DEVICE_SERIAL
+PKG=com.example.app
+P=$(adb -s "$SER" shell pm path "$PKG" | tr -d '\r' | sed -n 's/^package://p' | grep '/base\.apk$' | head -n1)
+D=$(dirname "$P")
+adb -s "$SER" shell "su 0 sh -c \"find '$D/oat' -type f \\( -name '*.odex' -o -name '*.vdex' \\) | sort\""
+adb -s "$SER" exec-out su 0 sh -c "cat '$D/oat/arm64/base.odex'" | sha256sum
+adb -s "$SER" exec-out su 0 sh -c "cat '$D/oat/arm64/base.vdex'" | sha256sum
+```
+
+Notes:
+- these files usually require root on retail devices because they live under `/data/app/.../oat`
+- compare by relative path such as `oat/arm64/base.odex`, not by absolute install path, because the randomized `/data/app/~~...` directory differs per device
+- matching `base.apk` does not imply matching `.odex/.vdex`; compiled artifacts can differ across devices due to compiler filter, ART state, profile state, or regeneration timing
 
 ### Stop monkey immediately
 

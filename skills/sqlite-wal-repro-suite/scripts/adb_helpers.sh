@@ -55,7 +55,16 @@ adb_su_sh() {
   local cmd="$1"
   local q
   q=$(_sh_single_quote "$cmd")
-  adb_host shell su -c "sh -c $q"
+  # Important: avoid nesting `sh -c` here.
+  #
+  # On some Android/Magisk `su` implementations, `su -c "sh -c '...'"` can
+  # mis-handle quoting such that the inner `'...'` is not preserved, and the
+  # command gets truncated to its first token. That breaks redirections/pipes
+  # and even simple `test -d ...` checks.
+  #
+  # `su -c '<cmd>'` is enough as long as the outer shell does not interpret the
+  # metacharacters; we ensure that by single-quoting the whole command.
+  adb_host shell su -c "$q"
 }
 
 adb_exec_out_su() {

@@ -1,6 +1,6 @@
 ---
 name: codex-auth-secure-launch
-description: "protect Codex CLI API keys at rest without breaking normal usage. use this whenever the user asks to encrypt ~/.codex/auth.json, stop leaving Codex API keys in plaintext, migrate Codex auth from auth.json to keyring or env_key, force Codex launches through a wrapper, or keep the usual `codex -p high` UX while using an encrypted key file. includes migration, backup, wrapper, and rollback steps."
+description: "protect Codex CLI API keys at rest without breaking normal usage. use this whenever the user asks to encrypt ~/.codex/auth.json, stop leaving Codex API keys in plaintext, migrate Codex auth from auth.json to keyring or env_key, rotate or revoke an existing Codex API key in a secure-launch setup, force Codex launches through a wrapper, or keep the usual `codex -p high` UX while using an encrypted key file. includes migration, rotation, backup, wrapper, and rollback steps."
 ---
 
 # Codex Auth Secure Launch
@@ -64,6 +64,12 @@ codex() {
 ### 4. Retire plaintext carefully
 - After validating the new path, move `~/.codex/auth.json` aside to a timestamped backup.
 - Do not silently delete it unless the user explicitly asks.
+
+### 5. Handle API key rotation
+- Treat "change the API key", "replace a revoked key", and "rotate a compromised key" as first-class cases for this skill.
+- Separate provider wiring from credential storage. In an `env_key` plus encrypted-file setup, `~/.codex/config.toml` and the shell wrapper often stay unchanged while only the encrypted key file is replaced.
+- If `auth.json` is already gone, rebuild the encrypted key file from a temporary secret source, then remove the temporary plaintext immediately after `init` succeeds.
+- Validate the wrapper launch path after rotation before deleting the previous encrypted-file backup.
 
 ## References
 - [references/codex-auth-hardening.md](references/codex-auth-hardening.md)

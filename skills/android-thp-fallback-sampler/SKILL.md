@@ -144,6 +144,9 @@ python3 scripts/run_memstress_and_collect_logs.py \
 - `--hold-ms <ms>`：每次成功启动后 hold（用于“闪进一会再回桌面”的节奏控制；默认 200ms）
 - `--launch-gap-ms <ms>` / `--cycle-sleep-ms <ms>`：启动间隔与轮间隔
 - `--prefer-keywords <csv>`：关键词自动偏置（camera/video/...）
+- `--oat-prune-watch`：运行期间轮询目标包并删除重新生成的 `oat/odex/vdex/art`
+- `--oat-prune-package <pkg>` / `--oat-prune-package-file <file>`：覆盖默认 watcher 包集；默认用当前 memstress 已安装目标包
+- `--oat-prune-poll-s <sec>`：watcher 轮询周期；建议从 `2s` 起步
 
 ---
 
@@ -192,6 +195,9 @@ python3 scripts/run_memstress_and_collect_logs.py \
 - monkey runner 现在默认带 `--ignore-native-crashes`，避免某个 app 的 native crash 直接把整轮 workload 打断；只有显式传 `--abort-on-native-crash` 时才恢复 crash-stop 行为。
 - memstress 只会在你显式传入的 package 集合内循环，不会像 `monkey --global` 那样全域乱跑；如果想强行偏向相机/视频，优先传明确的 `--memstress-heavy-package`，不要只依赖关键词猜测。
 - memstress 当前策略已精简为：`am start`（不带 `-W`）+ hold + HOME，不做 `force-stop`/LRU；详见 `references/memstress_strategy.md`。
+- memstress 的 classloading crash 监测现在只会对**目标 workload 包**生效；无关系统包的 `am_crash + ClassNotFoundException` 不会再把整轮实验误停。对应回归测试见 `tests/test_crash_signature.py`。
+- 如果后台 `dex2oat/artd` 会持续把目标包的编译产物补回来，可以开启 `--oat-prune-watch`；watcher 同时覆盖包目录下的 `oat/` 和 `/data/dalvik-cache`，但会明确跳过 `*.tmp`，避免碰发布中的临时文件。对应脚本见 `scripts/watch_oat_prune.py` 和 `tests/test_oat_watch.py`。
+- `watch_live_plot.py` 默认会在 `--out-dir` 下寻找 `<serial>/raw_samples.csv`，更适合 fleet/多设备目录；如果是单设备 direct-out-dir（`raw_samples.csv` 直接落在运行目录根），可把“运行目录的父目录”传给 `--out-dir`，把“运行目录 basename”当作 `--serial`，或者直接手工跑一次 `derive_metrics.py` 做即时对比。
 
 ---
 
@@ -201,6 +207,7 @@ python3 scripts/run_memstress_and_collect_logs.py \
 - `scripts/run_memstress_and_collect_logs.py`：跑采样 + memstress（logcat + cycle log + dumpsys）
 - `scripts/launch_memstress_detached.sh`：可靠后台启动 memstress（setsid + pidfile + stdout/stderr）
 - `scripts/launch_memstress_uc_douyin_huoshan_detached.sh`：三 app 循环一键后台启动（UC + 抖音 + 火山）
+- `scripts/watch_oat_prune.py`：独立 sidecar watcher，轮询目标包并删除 regenerated `oat/odex/vdex/art`（跳过 `*.tmp`）
 - `scripts/plot_derived_svg.py`：把 `derived.csv` 画成 `SVG`（无 matplotlib/pandas 依赖；支持多设备多曲线）
 - `scripts/watch_live_plot.py`：长测期间定期从 `raw_samples.csv` 生成临时 `derived.csv` 并更新对比 `SVG`（`latest/` + `archive/`）
 
@@ -220,6 +227,18 @@ python3 scripts/plot_derived_svg.py \
   ./output/thp_memstress_fleet_001/<SERIAL_B>/derived.csv \
   --align absolute \
   --out-dir ./output/plot_fleet_001
+```
+
+单设备 detached run 的 live plot：
+
+```bash
+RUN=./output/memstress_20260420_220754_1A071FDF600053
+python3 scripts/watch_live_plot.py \
+  --out-dir "$(dirname "$RUN")" \
+  --serial "$(basename "$RUN")" \
+  --plot-dir "$RUN/live_plot" \
+  --every-s 30 \
+  --align absolute
 ```
 - `scripts/run_experiment.py`：兼容 wrapper（deprecated）
 - `scripts/derive_metrics.py`：把 raw CSV 变成 derived+summary

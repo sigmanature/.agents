@@ -1,6 +1,6 @@
-com.learnos.sqlitewalrepro.test.app-core-1.5.0-0 /home/nzzhao/.gradle/caches/transforms-4/1e2c9ea3966460afaa39ffb67aca3e9a/transformed/core-1.5.0/res
-com.learnos.sqlitewalrepro.test.app-annotation-experimental-1.1.0-1 /home/nzzhao/.gradle/caches/transforms-4/eacc97ec7083df775f9497376ba76cc2/transformed/annotation-experimental-1.1.0/res
-com.learnos.sqlitewalrepro.test.app-androidTest-2 /home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/generated/res/resValues/androidTest/debug
-com.learnos.sqlitewalrepro.test.app-mergeDebugAndroidTestResources-3 /home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/incremental/debugAndroidTest/mergeDebugAndroidTestResources/merged.dir
-com.learnos.sqlitewalrepro.test.app-mergeDebugAndroidTestResources-4 /home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/incremental/debugAndroidTest/mergeDebugAndroidTestResources/stripped.dir
-com.learnos.sqlitewalrepro.test.app-debugAndroidTest-5 /home/nzzhao/learn_os/android/sqlite_wal_checkpoint_repro_app/app/build/intermediates/merged_res/debugAndroidTest/mergeDebugAndroidTestResources
+com.learnos.sqlitewalrepro.test.app-androidTest-0 /home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/generated/res/resValues/androidTest/debug
+com.learnos.sqlitewalrepro.test.app-mergeDebugAndroidTestResources-1 /home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/incremental/debugAndroidTest/mergeDebugAndroidTestResources/merged.dir
+com.learnos.sqlitewalrepro.test.app-mergeDebugAndroidTestResources-2 /home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/incremental/debugAndroidTest/mergeDebugAndroidTestResources/stripped.dir
+com.learnos.sqlitewalrepro.test.app-debugAndroidTest-3 /home/nzzhao/.agents/skills/sqlite-wal-repro-suite/assets/sqlite_wal_checkpoint_repro_app/app/build/intermediates/merged_res/debugAndroidTest/mergeDebugAndroidTestResources
+com.learnos.sqlitewalrepro.test.app-core-1.5.0-4 /home/nzzhao/.gradle/caches/transforms-4/1e2c9ea3966460afaa39ffb67aca3e9a/transformed/core-1.5.0/res
+com.learnos.sqlitewalrepro.test.app-annotation-experimental-1.1.0-5 /home/nzzhao/.gradle/caches/transforms-4/eacc97ec7083df775f9497376ba76cc2/transformed/annotation-experimental-1.1.0/res

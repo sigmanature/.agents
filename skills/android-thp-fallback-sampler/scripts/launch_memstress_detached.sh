@@ -52,6 +52,13 @@ Example (quickhome subset):
     --package-file ./quickhome_packages_21121FDF600C4G_20260414.txt \
     --heavy-package-file ./quickhome_heavy_packages_21121FDF600C4G_20260414.txt \
     -- --use-su --thp-ensure-mode none --clear-logcat --burst-size 4 --heavy-per-burst 2 --hold-ms 300 --launch-gap-ms 300 --cycle-sleep-ms 200
+
+Example (with oat prune watcher enabled inside runner):
+  ./scripts/launch_memstress_detached.sh \
+    --repo /home/nzzhao/learn_os/output/top100_install_20260325_dual \
+    --serial 21121FDF600C4G \
+    --package-file ./selected_packages_camera_wechat_uc_aweme_huoshan_20260420.txt \
+    -- --use-su --oat-prune-watch --oat-prune-poll-s 2 --hold-ms 100 --launch-gap-ms 0 --cycle-sleep-ms 0
 EOF
 }
 

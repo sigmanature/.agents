@@ -55,7 +55,13 @@ adb_su_sh() {
   local cmd="$1"
   local q
   q=$(_sh_single_quote "$cmd")
-  adb_host shell su -c "sh -c $q"
+  # Keep the whole command as a single quoted string to `su -c`.
+  #
+  # Some Magisk / Android shell combinations mis-handle the extra `sh -c`
+  # layer and return failure even for simple commands like `test -d ...`.
+  # Passing the already-quoted command directly to `su -c` is the more
+  # portable form across the devices we have tested.
+  adb_host shell su -c "$q"
 }
 
 adb_exec_out_su() {

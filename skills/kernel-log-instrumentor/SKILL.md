@@ -104,6 +104,7 @@ Unless the user asks otherwise, respond in this structure:
 - [references/log-table-workflow.md](references/log-table-workflow.md)
 - [references/f2fs-writeback-kv-logs.md](references/f2fs-writeback-kv-logs.md)
 - [references/f2fs-writeback-kv-filter.md](references/f2fs-writeback-kv-filter.md)
+- [references/f2fs-write_cache_folios-eagain-propagation.md](references/f2fs-write_cache_folios-eagain-propagation.md)
 - [references/f2fs-inode-centric-atomic-verity-large-folio.md](references/f2fs-inode-centric-atomic-verity-large-folio.md)
 - [references/fscrypt_open_einval_pkgxml.md](references/fscrypt_open_einval_pkgxml.md) (recipe for `/data/system/packages.xml` `open failed: EINVAL`)
 - [references/fsverity_open_einval_pkgxml.md](references/fsverity_open_einval_pkgxml.md) (recipe for `/data/system/packages.xml` `open failed: EINVAL` due to fs-verity)

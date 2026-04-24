@@ -6,6 +6,8 @@ This note targets a **pattern**:
 - You recently changed **kernel / f2fs / large-folio / compression / atomic-IO** behavior.
 - You need to locate **which concrete on-disk files are implicated** and determine whether it’s **storage related**.
 
+If the APK is already known-good and you want to focus directly on the live odex/vdex artifacts, use `references/dex_cnfe_odex_vdex_forensics.md`.
+
 ## Core diagnosis rule (fast split)
 
 If the class is reported “not found”, **first check whether it’s actually missing from the APK**.
@@ -128,4 +130,3 @@ adb reboot
 ```
 
 If the problem persists after fresh compilation, it’s strong evidence that your kernel/fs changes broke **mmap/page-fault/dex loading**, not just stale cache.
-

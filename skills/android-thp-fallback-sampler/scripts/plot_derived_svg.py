@@ -90,27 +90,33 @@ def _safe_div(a: float, b: float) -> float:
 class Series:
     label: str
     host_ts: List[int]
-    ratio: List[float]
-    attempts: List[int]
+    ratio: List[Optional[float]]
+    attempts: List[Optional[int]]
+    d_alloc: List[Optional[int]]
+    d_fallback: List[Optional[int]]
 
-    def stats(self) -> Dict[str, object]:
-        r = [x for x in self.ratio if x is not None and math.isfinite(x)]
-        if not r:
+    def stats(self, metric: str) -> Dict[str, object]:
+        points = build_metric_points(self, metric)
+        values = [y for _, y in points if math.isfinite(y)]
+        if not values:
             return {"points": 0}
         out: Dict[str, object] = {
-            "points": len(r),
-            "min": min(r),
-            "max": max(r),
-            "median": statistics.median(r),
-            "p90_approx": statistics.quantiles(r, n=10)[8] if len(r) >= 10 else None,
+            "points": len(values),
+            "min": min(values),
+            "max": max(values),
+            "median": statistics.median(values),
+            "last": values[-1],
+            "p90_approx": statistics.quantiles(values, n=10)[8] if len(values) >= 10 else None,
         }
         return out
 
 
 def load_derived(path: Path, label: str, *, max_points: int) -> Series:
     host_ts: List[int] = []
-    ratio: List[float] = []
-    attempts: List[int] = []
+    ratio: List[Optional[float]] = []
+    attempts: List[Optional[int]] = []
+    d_alloc: List[Optional[int]] = []
+    d_fallback: List[Optional[int]] = []
 
     with path.open("r", encoding="utf-8") as f:
         r = csv.DictReader(f)
@@ -119,14 +125,25 @@ def load_derived(path: Path, label: str, *, max_points: int) -> Series:
                 break
             ts = _to_int(row.get("window_end_host_ts", ""))
             ra = _to_float(row.get("fallback_ratio", ""))
-            at = _to_int(row.get("attempts", "")) or 0
-            if ts is None or ra is None:
+            at = _to_int(row.get("attempts", ""))
+            da = _to_int(row.get("d_anon_fault_alloc", ""))
+            df = _to_int(row.get("d_anon_fault_fallback", ""))
+            if ts is None:
                 continue
             host_ts.append(ts)
             ratio.append(ra)
-            attempts.append(max(0, at))
+            attempts.append(at)
+            d_alloc.append(da)
+            d_fallback.append(df)
 
-    return Series(label=label, host_ts=host_ts, ratio=ratio, attempts=attempts)
+    return Series(
+        label=label,
+        host_ts=host_ts,
+        ratio=ratio,
+        attempts=attempts,
+        d_alloc=d_alloc,
+        d_fallback=d_fallback,
+    )
 
 
 def downsample(series: Series, *, max_points: int) -> Series:
@@ -140,7 +157,48 @@ def downsample(series: Series, *, max_points: int) -> Series:
         host_ts=[series.host_ts[i] for i in idx],
         ratio=[series.ratio[i] for i in idx],
         attempts=[series.attempts[i] for i in idx],
+        d_alloc=[series.d_alloc[i] for i in idx],
+        d_fallback=[series.d_fallback[i] for i in idx],
     )
+
+
+def build_metric_points(series: Series, metric: str) -> List[Tuple[int, float]]:
+    points: List[Tuple[int, float]] = []
+    cumulative_fallback = 0
+    cumulative_attempts = 0
+
+    for ts, ratio, attempts, d_fallback in zip(
+        series.host_ts,
+        series.ratio,
+        series.attempts,
+        series.d_fallback,
+    ):
+        if metric == "fallback_ratio":
+            if ratio is None or not math.isfinite(ratio):
+                continue
+            points.append((ts, ratio))
+            continue
+
+        if metric == "cumulative_fallback":
+            if d_fallback is None or d_fallback < 0:
+                continue
+            cumulative_fallback += d_fallback
+            points.append((ts, float(cumulative_fallback)))
+            continue
+
+        if metric == "cumulative_ratio":
+            if attempts is None or d_fallback is None or attempts < 0 or d_fallback < 0:
+                continue
+            cumulative_attempts += attempts
+            cumulative_fallback += d_fallback
+            if cumulative_attempts <= 0:
+                continue
+            points.append((ts, cumulative_fallback / cumulative_attempts))
+            continue
+
+        raise ValueError(f"unsupported metric: {metric}")
+
+    return points
 
 
 def _nice_ticks(lo: float, hi: float, n: int) -> List[float]:
@@ -161,11 +219,13 @@ def _svg_text(x: float, y: float, text: str, *, size: int = 12, anchor: str = "s
     return f'<text x="{x:.2f}" y="{y:.2f}" font-size="{size}" text-anchor="{anchor}">{safe}</text>'
 
 
-def plot_fallback_ratio_svg(
+def plot_metric_svg(
     series_list: Sequence[Series],
     *,
+    metric: str,
     out_svg: Path,
     title: str,
+    y_label: str,
     align: str,
     ticks: int,
 ) -> None:
@@ -180,24 +240,33 @@ def plot_fallback_ratio_svg(
     all_x: List[float] = []
     all_y: List[float] = []
     x_by_series: List[List[float]] = []
+    y_by_series: List[List[float]] = []
     for s in series_list:
-        if not s.host_ts or not s.ratio:
+        points = build_metric_points(s, metric)
+        if not points:
             x_by_series.append([])
+            y_by_series.append([])
             continue
+        point_ts = [ts for ts, _ in points]
+        point_y = [y for _, y in points]
 
         if align == "absolute":
             # Normalize to the earliest sample among all series.
             # We'll compute after collecting min_ts.
-            x_by_series.append([float(ts) for ts in s.host_ts])
+            x_by_series.append([float(ts) for ts in point_ts])
         else:
-            t0 = s.host_ts[0]
-            x_by_series.append([(ts - t0) / 60.0 for ts in s.host_ts])
+            t0 = point_ts[0]
+            x_by_series.append([(ts - t0) / 60.0 for ts in point_ts])
+        y_by_series.append(point_y)
 
-        all_y.extend([_clamp(y, 0.0, 1.0) for y in s.ratio])
+        if metric.endswith("_ratio"):
+            all_y.extend([_clamp(y, 0.0, 1.0) for y in point_y])
+        else:
+            all_y.extend(point_y)
 
     if align == "absolute":
         # Convert host_ts to minutes since min(all series).
-        min_ts = min((min(s.host_ts) for s in series_list if s.host_ts), default=0)
+        min_ts = min((pts[0][0] for pts in (build_metric_points(s, metric) for s in series_list) if pts), default=0)
         x_by_series2: List[List[float]] = []
         for xs in x_by_series:
             x_by_series2.append([(v - min_ts) / 60.0 for v in xs])
@@ -214,7 +283,10 @@ def plot_fallback_ratio_svg(
     x_max = max(all_x)
     y_min = 0.0
     y_max = max(0.02, max(all_y))
-    y_max = min(1.0, y_max * 1.05)
+    if metric.endswith("_ratio"):
+        y_max = min(1.0, y_max * 1.05)
+    else:
+        y_max = y_max * 1.05
 
     plot_w = max(10, w - pl - pr)
     plot_h = max(10, h - pt - pb)
@@ -250,20 +322,23 @@ def plot_fallback_ratio_svg(
     for v in _nice_ticks(y_min, y_max, max(2, ticks)):
         y = sy(v)
         parts.append(f'<line x1="{x0}" y1="{y:.2f}" x2="{pl + plot_w}" y2="{y:.2f}" stroke="#eee" stroke-width="1"/>')
-        parts.append(_svg_text(x0 - 10, y + 4, f"{v:.3f}", size=11, anchor="end"))
-    parts.append(_svg_text(18, pt + plot_h / 2, "fallback_ratio", size=12, anchor="middle"))
+        label = f"{v:.3f}" if metric.endswith("_ratio") else f"{v:.0f}"
+        parts.append(_svg_text(x0 - 10, y + 4, label, size=11, anchor="end"))
+    parts.append(_svg_text(18, pt + plot_h / 2, y_label, size=12, anchor="middle"))
 
     # Series polylines + legend
     legend_x = pl
     legend_y = pt + plot_h + 44
     for i, s in enumerate(series_list):
         xs = x_by_series[i]
-        if not xs or not s.ratio:
+        ys = y_by_series[i]
+        if not xs or not ys:
             continue
         color = PALETTE[i % len(PALETTE)]
         pts: List[str] = []
-        for x, y in zip(xs, s.ratio):
-            pts.append(f"{sx(x):.2f},{sy(_clamp(y, 0.0, 1.0)):.2f}")
+        for x, y in zip(xs, ys):
+            plot_y = _clamp(y, 0.0, 1.0) if metric.endswith("_ratio") else y
+            pts.append(f"{sx(x):.2f},{sy(plot_y):.2f}")
         parts.append(f'<polyline fill="none" stroke="{color}" stroke-width="1.2" points="{" ".join(pts)}"/>')
 
         # Legend entry
@@ -276,19 +351,21 @@ def plot_fallback_ratio_svg(
     out_svg.write_text("\n".join(parts), encoding="utf-8")
 
 
-def write_summary(series_list: Sequence[Series], out_md: Path, *, svg_path: Path) -> None:
+def write_summary(series_list: Sequence[Series], out_md: Path, *, svg_path: Path, metric: str) -> None:
     lines: List[str] = []
     lines.append("# THP derived.csv plot summary\n")
+    lines.append(f"- metric: `{metric}`")
     lines.append(f"- svg: `{svg_path}`\n")
     for s in series_list:
-        st = s.stats()
+        st = s.stats(metric)
         lines.append(f"## {s.label}\n")
         lines.append(f"- points: {st.get('points', 0)}")
         if st.get("points", 0):
-            lines.append(f"- ratio min/max: {st['min']:.6f} / {st['max']:.6f}")
-            lines.append(f"- ratio median: {st['median']:.6f}")
+            lines.append(f"- value min/max: {st['min']:.6f} / {st['max']:.6f}")
+            lines.append(f"- value median: {st['median']:.6f}")
+            lines.append(f"- value last: {st['last']:.6f}")
             if st.get("p90_approx") is not None:
-                lines.append(f"- ratio p90 (approx): {float(st['p90_approx']):.6f}")
+                lines.append(f"- value p90 (approx): {float(st['p90_approx']):.6f}")
         lines.append("")
     out_md.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
@@ -304,8 +381,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default="relative",
         help="relative: x=minutes since each series first sample; absolute: x=minutes since earliest sample across series",
     )
+    p.add_argument(
+        "--metric",
+        choices=["fallback_ratio", "cumulative_fallback", "cumulative_ratio"],
+        default="fallback_ratio",
+        help="fallback_ratio: per-window ratio; cumulative_fallback: cumulative fallback count; cumulative_ratio: cumulative overall fallback ratio",
+    )
     p.add_argument("--ticks", type=int, default=int(CONFIG["default_ticks"]), help="Number of axis ticks (approx)")
-    p.add_argument("--title", default="THP anon fallback_ratio", help="Plot title")
+    p.add_argument("--title", default=None, help="Plot title")
     p.add_argument("--max-points", type=int, default=int(CONFIG["max_points"]), help="Max points per series after load")
     return p.parse_args(argv)
 
@@ -342,15 +425,28 @@ def main(argv: Optional[List[str]] = None) -> int:
         s = downsample(s, max_points=min(int(args.max_points), int(CONFIG["max_points"])))
         series_list.append(s)
 
-    svg_path = out_dir / "fallback_ratio.svg"
-    plot_fallback_ratio_svg(
+    default_titles = {
+        "fallback_ratio": "THP anon fallback_ratio",
+        "cumulative_fallback": "THP cumulative anon fallback count",
+        "cumulative_ratio": "THP cumulative overall fallback_ratio",
+    }
+    y_labels = {
+        "fallback_ratio": "fallback_ratio",
+        "cumulative_fallback": "cumulative_fallback",
+        "cumulative_ratio": "cumulative_ratio",
+    }
+
+    svg_path = out_dir / f"{args.metric}.svg"
+    plot_metric_svg(
         series_list,
+        metric=str(args.metric),
         out_svg=svg_path,
-        title=str(args.title),
+        title=str(args.title or default_titles[str(args.metric)]),
+        y_label=y_labels[str(args.metric)],
         align=str(args.align),
         ticks=max(2, int(args.ticks)),
     )
-    write_summary(series_list, out_dir / "plot_summary.md", svg_path=svg_path)
+    write_summary(series_list, out_dir / "plot_summary.md", svg_path=svg_path, metric=str(args.metric))
 
     print(f"Done. out_dir: {out_dir}")
     return 0

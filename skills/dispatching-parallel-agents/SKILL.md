@@ -258,8 +258,9 @@ Return: Summary of what you found and what you fixed.
 **❌ Vague output:** "Fix it" - you don't know what changed
 **✅ Specific:** "Return summary of root cause and changes"
 
-**❌ Forcing `model` in `spawn_agent`:** Can fail if the runtime’s subagent model allow-list differs
-**✅ Default to runtime choice:** Omit `model` unless you have a known-good allow-list (see `references/subagent-model-override.md`)
+**❌ Treating `spawn_agent(model=...)` as the main model-selection path:** Can fail if the runtime ignores or restricts subagent model overrides
+**✅ Default to runtime choice when you do not care:** Omit `model`
+**✅ Use a named custom agent when you do care:** Pin `model` in `agents.<name>.config_file` instead of relying on per-call overrides (see `references/subagent-model-override.md`)
 
 ## When NOT to Use
 
