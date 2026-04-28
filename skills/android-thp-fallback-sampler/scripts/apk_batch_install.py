@@ -65,7 +65,14 @@ def list_apks(apk_dir: Path) -> List[Path]:
     if not apk_dir.exists() or not apk_dir.is_dir():
         raise FileNotFoundError(f"apk_dir not found or not a directory: {apk_dir}")
 
-    apks = sorted([p for p in apk_dir.iterdir() if p.is_file() and p.suffix.lower() == ".apk"])
+    apk_entries = sorted([p for p in apk_dir.iterdir() if p.suffix.lower() == ".apk"])
+    broken = [p for p in apk_entries if p.is_symlink() and not p.exists()]
+    if broken:
+        preview = ", ".join(p.name for p in broken[:10])
+        more = "" if len(broken) <= 10 else f" ... (+{len(broken) - 10} more)"
+        raise FileNotFoundError(f"broken APK symlink(s) under {apk_dir}: {preview}{more}")
+
+    apks = [p for p in apk_entries if p.is_file()]
     return apks
 
 

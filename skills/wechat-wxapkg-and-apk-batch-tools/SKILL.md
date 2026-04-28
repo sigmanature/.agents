@@ -119,6 +119,7 @@ In output dir:
 ### 4) Troubleshooting
 - No devices found: `adb devices` shows none in `device` state (unauthorized/offline)
 - `INSTALL_FAILED_*`: inspect `install_log.jsonl` stderr; common causes are version downgrade, signature mismatch, low storage
+- Broken symlink in the APK staging directory: the installer now fails fast and names the missing `*.apk` entries; fix the staging directory before rerunning
 
 ---
 

@@ -49,6 +49,15 @@ Root detection (non-interactive):
 adb shell 'command -v su >/dev/null 2>&1 && su -c id >/dev/null 2>&1' && echo "su ok" || echo "no su"
 ```
 
+Some sysfs nodes still require an **interactive TTY** even when `su -c` exists.
+One concrete example on Pixel 6 test devices is:
+
+- `/sys/fs/f2fs/dm-49/max_folio_order_cap`
+- `/sys/fs/ext4/dm-3/max_folio_order_cap`
+
+Plain `adb shell su -c 'echo 2 > ...'` may fail with `Permission denied`, while a TTY-backed call succeeds.
+If that happens, prefer the TTY pattern documented below (or the skill's `adb_utils.adb_shell(..., tty=True)` helper).
+
 ### 3) `run-as <package>` (no root, app-private files)
 If the app is debuggable, `run-as` can read `/data/data/<pkg>/...`.
 

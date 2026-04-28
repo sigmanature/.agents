@@ -1,78 +1,84 @@
 ---
 name: codex-auth-secure-launch
-description: "protect Codex CLI API keys at rest without breaking normal usage. use this whenever the user asks to encrypt ~/.codex/auth.json, stop leaving Codex API keys in plaintext, migrate Codex auth from auth.json to keyring or env_key, rotate or revoke an existing Codex API key in a secure-launch setup, force Codex launches through a wrapper, or keep the usual `codex -p high` UX while using an encrypted key file. includes migration, rotation, backup, wrapper, and rollback steps."
+description: "use when the user wants to encrypt Codex or opencode API credentials at rest, launch either CLI through an encrypted key file, migrate away from plaintext auth.json, rotate keys without changing provider wiring, or keep the usual CLI UX while loading secrets from environment variables at launch"
 ---
 
 # Codex Auth Secure Launch
 
-Use this skill when the user wants to harden Codex credential handling but still keep Codex usable.
+Use this skill when the user wants to harden CLI credential handling without breaking normal Codex or `opencode` usage.
 
 The critical boundary is:
 
-- do not invent a custom encrypted format for `~/.codex/auth.json` and expect Codex to read it directly
-- either use the supported keyring path, or keep the secret encrypted at rest and decrypt it only into an environment variable at launch time
+- do not invent a custom encrypted format for a tool's native `auth.json` and expect the tool to keep reading it directly
+- either use the tool's supported keyring path, or keep the secret encrypted at rest and decrypt it only into environment variables at launch time
 
-## What to do
+## Workflow Contract
+
+### Main Workflow
+1. Inspect the current auth path and provider wiring.
+2. Choose the safest supported target: keyring if available, encrypted file plus launcher otherwise.
+3. Preserve the user's normal CLI habit with a wrapper that forwards `"$@"`.
+4. Validate the secure launch path, then move plaintext auth files aside instead of deleting them silently.
+
+## Security Boundary
+
+- Never open, read, `cat`, `sed`, `rg`, or otherwise inspect `~/.opencode/pass.txt` from the model layer.
+- Never invoke `openssl` directly from the model layer for `opencode` launch. Use `scripts/opencode_secure_run.sh` or the dedicated local MCP capability owned by `opencode-secure-mcp` instead.
+- Let the wrapper hand the pass-file path to `openssl` and perform decryption internally, then inject only environment variables into the child `opencode` process. The MCP server may orchestrate the wrapper, but it must not absorb the decryption logic.
+- If the wrapper fails because the pass file is missing or wrong, report that state and stop. Do not bypass the boundary by reading the pass file yourself.
+
+### Decision Table
+| Phase | Trigger / Symptom | Action | Verify | On Failure | Workflow Effect |
+|---|---|---|---|---|---|
+| Preflight | Tool already supports keyring and the user's workflow tolerates it | Prefer keyring over custom wrappers | Confirm the CLI authenticates without plaintext `auth.json` | Fall back to encrypted-file launcher | replace |
+| Preflight | User wants Codex secure launch | Use `scripts/codex_secure_launch.sh` and a provider-specific `env_key` when needed | Launch `codex ...` through the wrapper and confirm auth works | Re-check provider name, `env_key`, and encrypted file path | branch |
+| Preflight | User wants `opencode run` with an encrypted key and `~/.opencode/pass.txt` | Prefer the dedicated `opencode-secure-mcp` capability for reusable task execution; otherwise use `scripts/opencode_secure_run.sh` as the compatibility wrapper | Run a secure `opencode` task and confirm a response arrives | Add the required env key with `--env-key`, pick the correct model/provider mapping, or rebuild the encrypted key | branch |
+| Validation | Need to verify `opencode` wrapper auth without changing broader runtime state | Do **not** isolate with temporary `XDG_DATA_HOME`; first compare manual `MIFY_API_KEY=... opencode run ...` against wrapper launch under the normal user data directory | Confirm wrapper and manual env launch behave the same under the normal XDG layout | If behavior differs, debug env injection or encrypted key contents before attempting any auth-store surgery | replace |
+| Validation | Wrapper run under the normal XDG layout reaches the provider but returns `401 Invalid API Key` while a manual `MIFY_API_KEY=... opencode run ...` succeeds | Treat this as proof that the encrypted credential contents differ from the manual env value; rebuild `~/.opencode/auth.key.enc` from the known-good env key | Confirm manual env succeeds and wrapper fails under the same normal XDG layout | Replace the encrypted file with one generated from the validated key | branch |
+| Validation | Wrapper fails before `opencode` starts and `openssl` reports it cannot read the encrypted input cleanly | Treat this as an encrypted-file format mismatch first; rebuild `~/.opencode/auth.key.enc` with the same cipher, PBKDF2, iteration count, and supported output mode the wrapper expects | Confirm the failure happens before any provider request is emitted | Replace the hand-made encrypted file with one generated by the approved workflow | branch |
+| Guardrail | An implementation plan suggests reading `~/.opencode/pass.txt` directly or calling `openssl` manually | Reject that path and route through `scripts/opencode_secure_run.sh` or the `opencode-secure-mcp` wrapper-backed server | Confirm the final command begins with the wrapper path rather than `openssl` | Stop and explain the boundary | block |
+| Rotation | Raw API key changes but provider wiring stays the same | Rebuild only the encrypted file, keep wrappers and config stable | Re-run the normal wrapper command successfully | Restore encrypted-file backup and re-check passphrase and provider settings | continue |
+
+### Output Contract
+- phase reached:
+- decision path taken:
+- verification evidence:
+- fallback used:
+- unresolved blocker:
+- next workflow step:
+
+## What To Do
 
 1. Identify the current auth path.
    - `auth.json`
    - keyring
    - provider-specific `env_key`
+   - `opencode` native auth store under `~/.local/share/opencode/auth.json`
+   - `opencode` encrypted key at `~/.opencode/auth.key.enc`
+   - `opencode` passphrase file at `~/.opencode/pass.txt`
 2. Choose the safest supported target.
    - prefer keyring when it is available and fits the user's workflow
-   - otherwise use the encrypted-at-rest launcher in `scripts/codex_secure_launch.sh`
+   - otherwise use the encrypted-at-rest launchers in `scripts/`
 3. Preserve usability.
-   - keep `codex ...` invocation habits working by using a shell wrapper when requested
-   - preserve user flags such as `-p high` by forwarding `"$@"`
+   - keep `codex ...` or `opencode run ...` habits working by forwarding `"$@"`
 4. Always back up important config files before editing them.
    - especially `~/.codex/config.toml`
    - and shell init files such as `~/.bashrc`
 
-## Workflow
+## Delegation Boundary
 
-### 1. Inspect current state
-- Check whether `~/.codex/auth.json` exists and whether it contains only a simple API key.
-- Check whether the active provider already supports `env_key`.
-- Check whether a shell wrapper already exists.
-
-### 2. Choose migration mode
-
-#### A. Preferred when possible: keyring
-- Keep the solution on the supported Codex credential path.
-- Avoid plaintext `auth.json`.
-
-#### B. Good fallback: encrypted key file plus launcher
-- Store only the raw API key in an encrypted file such as `~/.codex/auth.key.enc`.
-- Launch Codex through `scripts/codex_secure_launch.sh`.
-- Export the decrypted value only into the chosen environment variable before `exec codex`.
-
-### 3. Preserve the user experience
-- If the user normally types `codex -p high`, add a shell function wrapper like:
-
-```bash
-codex() {
-  bash /home/nzzhao/.agents/skills/codex-auth-secure-launch/scripts/codex_secure_launch.sh run \
-    --encrypted-file "$HOME/.codex/auth.key.enc" \
-    --provider mify \
-    --env-key MIFY_API_KEY \
-    -- "$@"
-}
-```
-
-- This keeps the usual CLI habit while forcing auth through the secure path.
-
-### 4. Retire plaintext carefully
-- After validating the new path, move `~/.codex/auth.json` aside to a timestamped backup.
-- Do not silently delete it unless the user explicitly asks.
-
-### 5. Handle API key rotation
-- Treat "change the API key", "replace a revoked key", and "rotate a compromised key" as first-class cases for this skill.
-- Separate provider wiring from credential storage. In an `env_key` plus encrypted-file setup, `~/.codex/config.toml` and the shell wrapper often stay unchanged while only the encrypted key file is replaced.
-- If `auth.json` is already gone, rebuild the encrypted key file from a temporary secret source, then remove the temporary plaintext immediately after `init` succeeds.
-- Validate the wrapper launch path after rotation before deleting the previous encrypted-file backup.
+- This skill still owns auth hardening and encrypted-at-rest guidance.
+- The reusable `opencode` execution substrate now belongs to `opencode-secure-mcp`.
+- The local `scripts/opencode_secure_run.sh` path remains as a compatibility shim so older workflows do not break.
 
 ## References
+
 - [references/codex-auth-hardening.md](references/codex-auth-hardening.md)
+- [references/opencode-auth-hardening.md](references/opencode-auth-hardening.md)
+- `/home/nzzhao/.agents/skills/opencode-secure-mcp/SKILL.md`
 
 ## Scripts
+
 - [scripts/codex_secure_launch.sh](scripts/codex_secure_launch.sh)
+- [scripts/opencode_secure_run.sh](scripts/opencode_secure_run.sh)
+- [scripts/test_opencode_secure_run.sh](scripts/test_opencode_secure_run.sh)

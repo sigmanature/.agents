@@ -171,6 +171,7 @@ Useful building blocks in this path:
 - `scripts/extract_cnfe_classes.py` to normalize CNFE/NCDFE class names from logcat
 - `scripts/run_device_oatdump.sh` for package-scoped or explicit odex/oat probes
 - `scripts/vdexdump_min.py` for strict VDEX structural validation
+- `scripts/page_semantics_scan.py` for page-level section mapping, sparse-page clustering, and executable-page AArch64 anomaly scans on pulled ELF artifacts
 - `scripts/adb_watch_target_am_crash_vdex_tail.py` when you need a host-side watcher that waits for target-package `am_crash`, resolves the current live `base.vdex`, and reports whether the final file-valid partial page is all zero
 - `xxd` or `hexdump` on the pulled artifact for raw zero-page confirmation
 

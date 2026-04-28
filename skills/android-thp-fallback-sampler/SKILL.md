@@ -48,6 +48,8 @@ adb devices
 python3 scripts/apk_batch_install.py ./apks --output-dir ./output/apk_install_run_001
 ```
 
+如果 `./apks` 是你用符号链接拼出来的 staging 目录，脚本现在会在存在断链 `*.apk` 时直接报错并点名缺失项，先修好 staging 再继续长测。
+
 ### 2) 跑“采样 + monkey”长测
 
 ```bash
@@ -191,6 +193,7 @@ python3 scripts/run_memstress_and_collect_logs.py \
 - adb 显示 `device offline`：参考 `references/adb_device_offline_recovery.md` 的恢复步骤（`adb reconnect offline` / 重启 adb server）。
 - setup 命令带重定向：本工具会统一通过 `sh -c` 执行；需要 root 的话配合 `--use-su`。
 - 某些设备写 `.../enabled` 这类 sysfs 节点时，`adb shell su -c` 不够，必须带 TTY；脚本里的 THP ensure 写入已按这个方式处理。
+- 同类的 per-filesystem sysfs 节点也可能有这个限制，例如 Pixel 6 上的 `/sys/fs/f2fs/dm-49/max_folio_order_cap` 和 `/sys/fs/ext4/dm-3/max_folio_order_cap`；遇到 `Permission denied` 时优先走 `tty=True` 的 root 执行路径。
 - 某些设备上，monkey 前的亮屏/解锁必须用朴素的 `input keyevent KEYCODE_WAKEUP`、`wm dismiss-keyguard`、`input swipe`；`cmd input keyboard ...` 这类写法可能不会真正把设备从 `Dozing` 拉到 `Awake`。
 - monkey runner 现在默认带 `--ignore-native-crashes`，避免某个 app 的 native crash 直接把整轮 workload 打断；只有显式传 `--abort-on-native-crash` 时才恢复 crash-stop 行为。
 - memstress 只会在你显式传入的 package 集合内循环，不会像 `monkey --global` 那样全域乱跑；如果想强行偏向相机/视频，优先传明确的 `--memstress-heavy-package`，不要只依赖关键词猜测。
@@ -209,7 +212,7 @@ python3 scripts/run_memstress_and_collect_logs.py \
 - `scripts/launch_memstress_uc_douyin_huoshan_detached.sh`：三 app 循环一键后台启动（UC + 抖音 + 火山）
 - `scripts/watch_oat_prune.py`：独立 sidecar watcher，轮询目标包并删除 regenerated `oat/odex/vdex/art`（跳过 `*.tmp`）
 - `scripts/plot_derived_svg.py`：把 `derived.csv` 画成 `SVG`（无 matplotlib/pandas 依赖；支持多设备多曲线）
-- `scripts/watch_live_plot.py`：长测期间定期从 `raw_samples.csv` 生成临时 `derived.csv` 并更新对比 `SVG`（`latest/` + `archive/`）
+- `scripts/watch_live_plot.py`：长测期间定期从 `raw_samples.csv` 生成临时 `derived.csv` 并更新对比 `SVG`（`latest/` + `archive/`，支持 `fallback_ratio` / `cumulative_fallback` / `cumulative_ratio`）
 
 ### 绘图示例（无 matplotlib）
 
@@ -238,7 +241,8 @@ python3 scripts/watch_live_plot.py \
   --serial "$(basename "$RUN")" \
   --plot-dir "$RUN/live_plot" \
   --every-s 30 \
-  --align absolute
+  --align absolute \
+  --metric cumulative_fallback
 ```
 - `scripts/run_experiment.py`：兼容 wrapper（deprecated）
 - `scripts/derive_metrics.py`：把 raw CSV 变成 derived+summary

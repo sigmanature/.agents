@@ -1,0 +1,23 @@
+{
+  "skill_name": "onlyoffice-docx-pdf",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我本地装了 ONLYOFFICE，帮我把 /tmp/in.docx 转成 PDF，给我 agent 可直接调用的命令。",
+      "expected_output": "Uses the skill wrapper command and mentions the output path plus verification.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "这台机器只有 onlyoffice-desktopeditors，没有 documentbuilder。还可以稳定地命令行转 docx 到 pdf 吗？",
+      "expected_output": "Explains that the supported local automation path is missing, avoids presenting x2t as the default stable path, and points to the prerequisite clearly.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "不要用 sudo。给我一个用户级安装方法，让 agent 本地用 ONLYOFFICE 把 docx 转 pdf，并优先走这个路径。",
+      "expected_output": "Uses the user-level venv installer as the preferred path and points to ~/.local/bin/documentbuilder.",
+      "files": []
+    }
+  ]
+}

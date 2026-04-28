@@ -13,7 +13,7 @@ This script:
 3) runs `plot_derived_svg.py` to generate a comparison SVG (dependency-light)
 
 Outputs (under --plot-dir, default: <out_dir>/live_plot):
-- latest/ fallback_ratio.svg + plot_summary.md
+- latest/ <metric>.svg + plot_summary.md
 - archive/<timestamp>/... (optional)
 - status.json (quick state, last update times, line counts)
 """
@@ -124,6 +124,7 @@ def run_once(
     plot_dir: Path,
     serials: Sequence[str],
     align: str,
+    metric: str,
     title: str,
     archive: bool,
     timeout_s: int,
@@ -198,6 +199,8 @@ def run_once(
         str(plot_latest),
         "--align",
         str(align),
+        "--metric",
+        str(metric),
         "--title",
         str(title),
     ]
@@ -218,7 +221,7 @@ def run_once(
     if archive:
         dst = plot_archive_root / ts
         _mkdir(dst)
-        for name in ("fallback_ratio.svg", "plot_summary.md"):
+        for name in (f"{metric}.svg", "plot_summary.md"):
             src = plot_latest / name
             if src.exists():
                 shutil.copy2(src, dst / name)
@@ -245,7 +248,13 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--plot-dir", default=None, help="Plot output dir (default: <out_dir>/live_plot)")
     p.add_argument("--every-s", type=int, default=1800, help="Regenerate every N seconds (default: 1800)")
     p.add_argument("--align", choices=["relative", "absolute"], default="absolute", help="X-axis alignment (default: absolute)")
-    p.add_argument("--title", default="THP anon fallback_ratio (live)", help="Plot title")
+    p.add_argument(
+        "--metric",
+        choices=["fallback_ratio", "cumulative_fallback", "cumulative_ratio"],
+        default="fallback_ratio",
+        help="Metric passed through to plot_derived_svg.py (default: fallback_ratio)",
+    )
+    p.add_argument("--title", default=None, help="Plot title (default: inferred from metric)")
     p.add_argument("--no-archive", action="store_true", help="Do not create archive/<ts>/ snapshots")
     p.add_argument("--timeout-s", type=int, default=300, help="Timeout seconds for derive/plot steps (default: 300)")
     p.add_argument("--once", action="store_true", help="Run once and exit")
@@ -268,9 +277,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         raise RuntimeError(f"no serials discovered under out_dir: {out_dir}")
 
     status_path = plot_dir / "status.json"
+    default_titles = {
+        "fallback_ratio": "THP anon fallback_ratio (live)",
+        "cumulative_fallback": "THP cumulative anon fallback count (live)",
+        "cumulative_ratio": "THP cumulative overall fallback_ratio (live)",
+    }
     print(f"[watch] out_dir={out_dir}")
     print(f"[watch] plot_dir={plot_dir}")
-    print(f"[watch] serials={','.join(serials)} every_s={int(args.every_s)} align={args.align}")
+    print(
+        f"[watch] serials={','.join(serials)} every_s={int(args.every_s)} "
+        f"align={args.align} metric={args.metric}"
+    )
 
     while True:
         res = run_once(
@@ -278,13 +295,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             plot_dir=plot_dir,
             serials=serials,
             align=str(args.align),
-            title=str(args.title),
+            metric=str(args.metric),
+            title=str(args.title or default_titles[str(args.metric)]),
             archive=(not args.no_archive),
             timeout_s=max(30, int(args.timeout_s)),
         )
         status_path.write_text(json.dumps(res, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         if res.get("ok"):
-            print(f"[watch] {res.get('ts')} ok -> {plot_dir/'latest'/'fallback_ratio.svg'}")
+            print(f"[watch] {res.get('ts')} ok -> {plot_dir/'latest'/f'{args.metric}.svg'}")
         else:
             print(f"[watch] {res.get('ts')} not-ready: {res.get('error')}")
 

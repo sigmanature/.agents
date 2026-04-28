@@ -77,6 +77,43 @@ Important caveat:
 - a zero run by itself is not enough; ART artifacts can contain some benign zero regions
 - treat it as actionable when it is page-sized, in the middle of the file, or correlates with a class probe failure
 
+Global diff heuristic:
+
+- If bad and good artifacts have the same file size, differ in only a small number of 4KB pages, and each bad page differs across almost the entire page while neighboring pages remain byte-identical, that argues against a whole-file shift or general recompilation drift.
+- If those bad 4KB pages also fail to match any other 4KB page in the good artifact, the pattern is more consistent with localized page corruption than with a simple page-copy mixup from another offset.
+
+## Executable-page entropy prefilter
+
+Use this when the suspect file is a compiled ART artifact and you do **not** yet have a trustworthy peer file to diff against.
+
+## Workflow Contract
+
+### Main Workflow
+1. Detect the container first with `file` and `readelf -W -S`.
+2. If the file is ELF and has one or more executable (`AX`) sections, scan every 4KB page in those sections for cheap byte metrics first: entropy, zero-byte count, and longest zero run.
+3. Sort by entropy descending and only run AArch64 disassembly on the top outlier pages plus any immediate neighbors or crash-page candidates.
+4. Report whether the top outliers cluster in one region and whether they also look abnormal under disassembly.
+
+### Decision Table
+| Phase | Trigger / Symptom | Action | Verify | On Failure | Workflow Effect |
+|---|---|---|---|---|---|
+| Preflight | `file` says ELF aarch64 and `readelf` shows non-zero `AX` section(s) | Run executable-page entropy scan before asking for a good peer file | Top outlier pages are produced with concrete offsets and section names | If the file is too large to disassemble broadly, keep disassembly limited to the top entropy pages only | branch |
+| Preflight | ELF file has zero-sized `.text` or no executable section at all | Do **not** force AArch64 code-page heuristics onto it | `readelf` confirms `.text` size `0` or no `AX` section | Fall back to DEX/VDEX or section-layout analysis | replace |
+| Analysis | Top entropy pages cluster and also show AArch64 anomalies such as very high `.inst` / `undefined` counts or `objdump` abort on a page that should be code | Treat that as a strong no-peer signal for executable page corruption | Neighboring normal code pages in the same file keep much lower entropy and mostly decode into common mnemonics | Escalate to peer diff or live swap only after recording the outlier offsets | branch |
+| Analysis | Top entropy executable pages stay in the normal code range for that file and disassembly remains mostly common mnemonics with low `.inst` counts | Treat this as **not matching** the known SystemUI bad-code-page pattern | The top pages do not cluster into a narrow abnormal band | Switch to class-layout / dexdump / VDEX hypotheses instead of blaming executable page garbage | replace |
+
+### Output Contract
+- phase reached:
+- decision path taken:
+- verification evidence:
+- fallback used:
+- unresolved blocker:
+- next workflow step:
+
+Practical note:
+
+- In one confirmed SystemUI case, the corrupted executable pages stood out immediately under this prefilter: top `.text` pages were near entropy `7.95`, clustered into a few offsets, had hundreds of `.inst` / `undefined` lines, and some pages made `aarch64-linux-gnu-objdump` abort. By contrast, a current Wellbeing live artifact on the comparison device topped out around entropy `6.34` with low `.inst` counts and normal common-mnemonic density. Treat these numbers as an example of separation, not as a universal hard threshold.
+
 ### 3) Torn write / partial rewrite
 
 Strong signals:
@@ -172,6 +209,34 @@ Interpretation rules:
 - If `pm art dump` falls to `status=run-from-apk` and the package launches cleanly, the removed compiled artifacts were implicated.
 - If the package still crashes in `run-from-apk`, the failure is no longer specific to the removed compiled artifacts.
 - If an explicit `pm compile -f -r cmdline -m speed-profile` then regenerates a new live pair that also launches cleanly, keep both old and new files for byte/hash comparison instead of restoring immediately.
+
+Important caveat:
+
+- Treat a **partial isolation** (`classes.dex` moved aside but `.vdex` still live, or the reverse) as inconclusive. In that state, `pm art dump` can pivot to another status such as `verify`/`vdex`, while the process still crash-loops and fresh tombstones can still symbolize frames as `/data/dalvik-cache/...@classes.dex`.
+- Do not use a dex-only rename failure to clear the dex side or to blame `/apex` / source APK. First restore a consistent state, then rerun the intended pair-isolation workflow so the conclusion is based on `old+old` versus `none+none`, not on a mixed live pair.
+
+### Fast-path culprit swap when the counterpart already matches
+
+Use this shortcut only when one side is already de-risked by direct byte identity across devices, for example:
+
+- bad-device `classes.vdex` hash matches the good device
+- `/apex/.../libc.so` hash matches the good device
+- only bad-device `classes.dex` differs
+
+Recommended sequence:
+
+1. Pull the good-device copy of the primary suspect file.
+2. Keep the matching counterpart file in place on the bad device.
+3. Stop framework/services before replacing the suspect file at the exact live path.
+4. Start framework/services again.
+5. Immediately re-hash the live file on the bad device to prove the replacement survived startup.
+6. Re-check `pm art dump`, `pidof`, and the crash signature.
+
+Interpretation rules:
+
+- If the live hash on the bad device now matches the good device and the target process becomes stable, treat that replaced file as the primary suspect.
+- If the target process still crashes with the same signature after the live hash is confirmed to match the good device, the replaced file is not sufficient to explain the failure; escalate to the full mixed-pair matrix or upstream source/APEX inputs.
+- If startup silently regenerates or overwrites the replaced file before you can confirm the live hash, the experiment is inconclusive. Fix the workflow first; do not claim the file was exonerated.
 
 ## Mixed old/new pair differential
 
