@@ -89,10 +89,35 @@ def main() -> int:
                 shift
                 model=""
                 message=""
+                print_logs="false"
+                log_level=""
+                format_mode="default"
+                pure="false"
+                variant=""
                 while [[ $# -gt 0 ]]; do
                   case "$1" in
                     -m|--model)
                       model="${2:-}"
+                      shift 2
+                      ;;
+                    --print-logs)
+                      print_logs="true"
+                      shift
+                      ;;
+                    --log-level)
+                      log_level="${2:-}"
+                      shift 2
+                      ;;
+                    --format)
+                      format_mode="${2:-}"
+                      shift 2
+                      ;;
+                    --pure)
+                      pure="true"
+                      shift
+                      ;;
+                    --variant)
+                      variant="${2:-}"
                       shift 2
                       ;;
                     --)
@@ -100,16 +125,26 @@ def main() -> int:
                       break
                       ;;
                     *)
-                      message="${1:-}"
-                      shift
                       break
                       ;;
                   esac
                 done
+                if [[ $# -gt 0 ]]; then
+                  message="$1"
+                fi
                 [[ -n "${OPENAI_API_KEY:-}" ]] || { echo "missing OPENAI_API_KEY" >&2; exit 11; }
                 [[ "${OPENAI_API_KEY}" == "dummy-test-key" ]] || { echo "bad key" >&2; exit 12; }
+                if [[ "${print_logs}" == "true" ]]; then
+                  printf 'trace flags print_logs=%s log_level=%s format=%s pure=%s variant=%s\\n' \
+                    "${print_logs}" "${log_level}" "${format_mode}" "${pure}" "${variant}" >&2
+                fi
                 if [[ "${message}" == "sleepy" ]]; then
+                  printf 'sleepy-stdout-before-timeout\\n'
+                  printf 'sleepy-stderr-before-timeout\\n' >&2
                   sleep 30
+                fi
+                if [[ "${message}" == "requires-eof" ]]; then
+                  cat >/dev/null
                 fi
                 printf 'ok model=%s message=%s\\n' "${model}" "${message}"
                 """
@@ -169,6 +204,82 @@ def main() -> int:
             structured = run_resp["result"]["structuredContent"]
             assert structured["ok"] is True
             assert "hello from mcp" in structured["stdout"]
+
+            trace_resp = client.request(
+                "tools/call",
+                {
+                    "name": "opencode_run_task",
+                    "arguments": {
+                        "instruction": "trace me",
+                        "model": "Mify-Aili/tongyi/qwen3.6-plus-2026-04-02",
+                        "encrypted_file": str(encrypted_file),
+                        "pass_file": str(pass_file),
+                        "diagnostics": {
+                            "mode": "trace",
+                            "opencode": {
+                                "print_logs": True,
+                                "log_level": "DEBUG",
+                                "format": "json",
+                                "pure": True,
+                                "variant": "fast",
+                            },
+                        },
+                    },
+                },
+            )
+            trace_structured = trace_resp["result"]["structuredContent"]
+            assert trace_structured["ok"] is True
+            assert "trace flags print_logs=true" in trace_structured["stderr"]
+            assert "log_level=DEBUG" in trace_structured["stderr"]
+            assert "format=json" in trace_structured["stderr"]
+            assert "pure=true" in trace_structured["stderr"]
+            assert "variant=fast" in trace_structured["stderr"]
+
+            eof_resp = client.request(
+                "tools/call",
+                {
+                    "name": "opencode_run_task",
+                    "arguments": {
+                        "instruction": "requires-eof",
+                        "model": "Mify-Aili/tongyi/qwen3.6-plus-2026-04-02",
+                        "encrypted_file": str(encrypted_file),
+                        "pass_file": str(pass_file),
+                        "timeout_sec": 3,
+                    },
+                },
+            )
+            eof_structured = eof_resp["result"]["structuredContent"]
+            assert eof_structured["ok"] is True
+            assert "requires-eof" in eof_structured["stdout"]
+
+            timeout_resp = client.request(
+                "tools/call",
+                {
+                    "name": "opencode_run_task",
+                    "arguments": {
+                        "instruction": "sleepy",
+                        "model": "Mify-Aili/tongyi/qwen3.6-plus-2026-04-02",
+                        "encrypted_file": str(encrypted_file),
+                        "pass_file": str(pass_file),
+                        "timeout_sec": 1,
+                        "diagnostics": {
+                            "mode": "on_error",
+                            "capture_stdout_tail_bytes": 1024,
+                            "capture_stderr_tail_bytes": 1024,
+                            "persist_artifacts": True,
+                        },
+                    },
+                },
+            )
+            timeout_structured = timeout_resp["result"]["structuredContent"]
+            assert timeout_structured["ok"] is False
+            assert timeout_structured["error"]["code"] == "timeout"
+            diag = timeout_structured["diagnostics"]
+            assert diag["mode"] == "on_error"
+            assert "sleepy-stdout-before-timeout" in diag["stdout_tail"]
+            assert "sleepy-stderr-before-timeout" in diag["stderr_tail"]
+            assert pathlib.Path(diag["artifact_paths"]["stdout"]).exists()
+            assert pathlib.Path(diag["artifact_paths"]["stderr"]).exists()
 
             submit_resp = client.request(
                 "tools/call",

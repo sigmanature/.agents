@@ -1,3 +1,0 @@
-com.learnos.sqlitewalrepro.test
-style WhiteBackgroundDialogTheme
-style WhiteBackgroundTheme

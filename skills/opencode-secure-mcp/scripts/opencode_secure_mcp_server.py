@@ -28,6 +28,9 @@ PROCESS_TABLE: dict[str, subprocess.Popen[Any]] = {}
 DEBUG_LOG_PATH = pathlib.Path(
     os.environ.get("OPENCODE_SECURE_MCP_DEBUG_LOG", "~/.local/state/opencode-secure-mcp/server.log")
 ).expanduser()
+DIAGNOSTIC_MODES = {"off", "on_error", "trace"}
+LOG_LEVELS = {"DEBUG", "INFO", "WARN", "ERROR"}
+FORMAT_MODES = {"default", "json"}
 
 
 def ensure_dirs() -> None:
@@ -78,6 +81,159 @@ def success_result(summary: str, payload: dict[str, Any]) -> dict[str, Any]:
         "content": [{"type": "text", "text": summary}],
         "structuredContent": {"ok": True, **payload},
         "isError": False,
+    }
+
+
+def ensure_text_blob(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def tail_text(text: str, tail_bytes: int) -> str:
+    if tail_bytes <= 0:
+        return ""
+    data = text.encode("utf-8", errors="replace")
+    return data[-tail_bytes:].decode("utf-8", errors="replace")
+
+
+def write_artifact_text(path: pathlib.Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def diagnostics_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "mode": {
+                "type": "string",
+                "enum": sorted(DIAGNOSTIC_MODES),
+                "description": "Diagnostic verbosity. `on_error` keeps the success path quiet but enriches failures.",
+            },
+            "capture_stdout_tail_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Maximum stdout bytes to keep in failure diagnostics.",
+            },
+            "capture_stderr_tail_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Maximum stderr bytes to keep in failure diagnostics.",
+            },
+            "persist_artifacts": {
+                "type": "boolean",
+                "description": "Persist stdout/stderr artifacts for later collection.",
+            },
+            "redact_sensitive": {
+                "type": "boolean",
+                "description": "Reserved for future redaction controls. Defaults to true.",
+            },
+            "opencode": {
+                "type": "object",
+                "properties": {
+                    "print_logs": {"type": "boolean"},
+                    "log_level": {"type": "string", "enum": sorted(LOG_LEVELS)},
+                    "format": {"type": "string", "enum": sorted(FORMAT_MODES)},
+                    "pure": {"type": "boolean"},
+                    "variant": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "additionalProperties": False,
+    }
+
+
+def normalize_diagnostics(arguments: dict[str, Any]) -> dict[str, Any]:
+    raw = arguments.get("diagnostics") or {}
+    if not isinstance(raw, dict):
+        raise ValueError("diagnostics must be an object when provided")
+
+    mode = raw.get("mode", "on_error")
+    if mode not in DIAGNOSTIC_MODES:
+        raise ValueError(f"diagnostics.mode must be one of {sorted(DIAGNOSTIC_MODES)}")
+
+    stdout_tail_bytes = int(raw.get("capture_stdout_tail_bytes", 8192))
+    stderr_tail_bytes = int(raw.get("capture_stderr_tail_bytes", 8192))
+    if stdout_tail_bytes <= 0 or stderr_tail_bytes <= 0:
+        raise ValueError("diagnostic tail byte limits must be positive")
+
+    persist_artifacts = raw.get("persist_artifacts", True)
+    if not isinstance(persist_artifacts, bool):
+        raise ValueError("diagnostics.persist_artifacts must be a boolean")
+
+    redact_sensitive = raw.get("redact_sensitive", True)
+    if not isinstance(redact_sensitive, bool):
+        raise ValueError("diagnostics.redact_sensitive must be a boolean")
+
+    opencode_raw = raw.get("opencode") or {}
+    if not isinstance(opencode_raw, dict):
+        raise ValueError("diagnostics.opencode must be an object when provided")
+
+    print_logs = opencode_raw.get("print_logs")
+    if print_logs is None:
+        print_logs = mode == "trace"
+    elif not isinstance(print_logs, bool):
+        raise ValueError("diagnostics.opencode.print_logs must be a boolean")
+
+    log_level = opencode_raw.get("log_level")
+    if log_level is None and mode == "trace":
+        log_level = "DEBUG"
+    if log_level is not None:
+        if not isinstance(log_level, str) or log_level not in LOG_LEVELS:
+            raise ValueError(f"diagnostics.opencode.log_level must be one of {sorted(LOG_LEVELS)}")
+
+    format_mode = opencode_raw.get("format")
+    if format_mode is None and mode == "trace":
+        format_mode = "json"
+    if format_mode is not None:
+        if not isinstance(format_mode, str) or format_mode not in FORMAT_MODES:
+            raise ValueError(f"diagnostics.opencode.format must be one of {sorted(FORMAT_MODES)}")
+
+    pure = opencode_raw.get("pure")
+    if pure is not None and not isinstance(pure, bool):
+        raise ValueError("diagnostics.opencode.pure must be a boolean when provided")
+
+    variant = opencode_raw.get("variant")
+    if variant is not None and (not isinstance(variant, str) or not variant.strip()):
+        raise ValueError("diagnostics.opencode.variant must be a non-empty string when provided")
+
+    return {
+        "mode": mode,
+        "capture_stdout_tail_bytes": stdout_tail_bytes,
+        "capture_stderr_tail_bytes": stderr_tail_bytes,
+        "persist_artifacts": persist_artifacts,
+        "redact_sensitive": redact_sensitive,
+        "opencode": {
+            "print_logs": print_logs,
+            "log_level": log_level,
+            "format": format_mode,
+            "pure": pure,
+            "variant": variant,
+        },
+    }
+
+
+def build_failure_diagnostics(
+    diagnostics: dict[str, Any],
+    cmd: list[str],
+    cwd: str | None,
+    timeout_sec: int,
+    stdout_text: str,
+    stderr_text: str,
+    artifact_paths: dict[str, str] | None,
+) -> dict[str, Any]:
+    return {
+        "mode": diagnostics["mode"],
+        "timeout_sec": timeout_sec,
+        "cwd": cwd,
+        "command": cmd,
+        "stdout_tail": tail_text(stdout_text, diagnostics["capture_stdout_tail_bytes"]),
+        "stderr_tail": tail_text(stderr_text, diagnostics["capture_stderr_tail_bytes"]),
+        "artifact_paths": artifact_paths or {},
     }
 
 
@@ -159,6 +315,7 @@ def tool_definitions() -> list[dict[str, Any]]:
             "timeout_sec": {"type": "integer", "minimum": 1, "description": "Maximum runtime in seconds."},
             "request_id": {"type": "string"},
             "tags": {"type": "array", "items": {"type": "string"}},
+            "diagnostics": diagnostics_schema(),
             **secure_props,
         },
         "additionalProperties": False,
@@ -206,7 +363,7 @@ def tool_definitions() -> list[dict[str, Any]]:
     ]
 
 
-def build_wrapper_command(arguments: dict[str, Any]) -> tuple[list[str], str | None, int]:
+def build_wrapper_command(arguments: dict[str, Any]) -> tuple[list[str], str | None, int, dict[str, Any]]:
     instruction = arguments.get("instruction", "")
     if not isinstance(instruction, str) or not instruction.strip():
         raise ValueError("instruction must be a non-empty string")
@@ -220,6 +377,7 @@ def build_wrapper_command(arguments: dict[str, Any]) -> tuple[list[str], str | N
     timeout_sec = int(arguments.get("timeout_sec", 900))
     if timeout_sec <= 0:
         raise ValueError("timeout_sec must be positive")
+    diagnostics = normalize_diagnostics(arguments)
 
     cmd = ["bash", str(WRAPPER_PATH)]
     for opt_name in ("encrypted_file", "pass_file", "pass_env", "model"):
@@ -235,8 +393,20 @@ def build_wrapper_command(arguments: dict[str, Any]) -> tuple[list[str], str | N
     for name in env_keys:
         cmd.extend(["--env-key", name])
 
-    cmd.extend(["--", instruction])
-    return cmd, cwd, timeout_sec
+    cmd.append("--")
+    opencode = diagnostics["opencode"]
+    if opencode["print_logs"]:
+        cmd.append("--print-logs")
+    if opencode["log_level"] is not None:
+        cmd.extend(["--log-level", opencode["log_level"]])
+    if opencode["format"] is not None:
+        cmd.extend(["--format", opencode["format"]])
+    if opencode["pure"] is True:
+        cmd.append("--pure")
+    if opencode["variant"] is not None:
+        cmd.extend(["--variant", opencode["variant"]])
+    cmd.append(instruction)
+    return cmd, cwd, timeout_sec, diagnostics
 
 
 def read_log_tail(log_path: pathlib.Path, tail_bytes: int) -> str:
@@ -305,34 +475,85 @@ def refresh_jobs(registry: dict[str, Any]) -> None:
 def handle_run_task(arguments: dict[str, Any]) -> dict[str, Any]:
     debug_log("handle_run_task")
     try:
-        cmd, cwd, timeout_sec = build_wrapper_command(arguments)
+        cmd, cwd, timeout_sec, diagnostics = build_wrapper_command(arguments)
     except ValueError as exc:
         return error_result(str(exc))
 
+    run_dir: pathlib.Path | None = None
+    artifact_paths: dict[str, str] = {}
+    if diagnostics["persist_artifacts"]:
+        run_dir = ARTIFACTS_DIR / gen_id("sync")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        artifact_paths = {
+            "stdout": str(run_dir / "stdout.log"),
+            "stderr": str(run_dir / "stderr.log"),
+        }
+
     try:
+        # Keep opencode off the MCP transport pipe; inheriting stdin can make it wait for EOF forever.
         proc = subprocess.run(
             cmd,
             cwd=cwd,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout_sec,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        return error_result(f"synchronous task timed out after {timeout_sec}s", code="timeout")
+        stdout_text = ensure_text_blob(exc.stdout)
+        stderr_text = ensure_text_blob(exc.stderr)
+        if run_dir is not None:
+            write_artifact_text(pathlib.Path(artifact_paths["stdout"]), stdout_text)
+            write_artifact_text(pathlib.Path(artifact_paths["stderr"]), stderr_text)
+        return {
+            "content": [{"type": "text", "text": f"ERROR: synchronous task timed out after {timeout_sec}s"}],
+            "structuredContent": {
+                "ok": False,
+                "error": {"code": "timeout", "message": f"synchronous task timed out after {timeout_sec}s"},
+                "diagnostics": build_failure_diagnostics(
+                    diagnostics,
+                    cmd,
+                    cwd,
+                    timeout_sec,
+                    stdout_text,
+                    stderr_text,
+                    artifact_paths if artifact_paths else None,
+                ),
+            },
+            "isError": True,
+        }
+
+    stdout_text = ensure_text_blob(proc.stdout)
+    stderr_text = ensure_text_blob(proc.stderr)
+    if run_dir is not None:
+        write_artifact_text(pathlib.Path(artifact_paths["stdout"]), stdout_text)
+        write_artifact_text(pathlib.Path(artifact_paths["stderr"]), stderr_text)
 
     payload = {
         "mode": "sync",
         "status": "succeeded" if proc.returncode == 0 else "failed",
         "exit_code": proc.returncode,
-        "stdout": proc.stdout,
-        "stderr": proc.stderr,
+        "stdout": stdout_text,
+        "stderr": stderr_text,
         "cwd": cwd,
         "command": cmd,
         "finished_at": utc_now(),
     }
+    if artifact_paths:
+        payload["artifact_paths"] = artifact_paths
     if proc.returncode != 0:
         payload["error"] = {"code": "nonzero_exit", "message": f"process exited with code {proc.returncode}"}
+        if diagnostics["mode"] != "off":
+            payload["diagnostics"] = build_failure_diagnostics(
+                diagnostics,
+                cmd,
+                cwd,
+                timeout_sec,
+                stdout_text,
+                stderr_text,
+                artifact_paths if artifact_paths else None,
+            )
         return {
             "content": [{"type": "text", "text": f"opencode_run_task failed with exit code {proc.returncode}"}],
             "structuredContent": {"ok": False, **payload},
@@ -346,7 +567,7 @@ def handle_submit_task(arguments: dict[str, Any]) -> dict[str, Any]:
     registry = load_registry()
     refresh_jobs(registry)
     try:
-        cmd, cwd, timeout_sec = build_wrapper_command(arguments)
+        cmd, cwd, timeout_sec, diagnostics = build_wrapper_command(arguments)
     except ValueError as exc:
         return error_result(str(exc))
 
@@ -358,9 +579,11 @@ def handle_submit_task(arguments: dict[str, Any]) -> dict[str, Any]:
     stderr_path.touch()
 
     stdout_handle = stdout_path.open("wb")
+    # Background jobs need the same isolation from MCP stdin as synchronous runs.
     proc = subprocess.Popen(
         cmd,
         cwd=cwd,
+        stdin=subprocess.DEVNULL,
         stdout=stdout_handle,
         stderr=subprocess.STDOUT,
         start_new_session=True,
@@ -379,6 +602,7 @@ def handle_submit_task(arguments: dict[str, Any]) -> dict[str, Any]:
         "cwd": cwd,
         "pid": proc.pid,
         "timeout_sec": timeout_sec,
+        "diagnostics": diagnostics,
         "submitted_at": utc_now(),
         "started_at": utc_now(),
         "started_ts": time.time(),

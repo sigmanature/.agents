@@ -25,8 +25,10 @@ This skill owns the reusable bottom-layer pieces for secure `opencode` execution
 1. Confirm the user actually wants a reusable bottom-layer capability, not just a one-off wrapper launch.
 2. Register the local stdio MCP server with Codex through `scripts/register_opencode_secure_mcp.sh` when needed.
 3. Use the MCP tools for task execution; keep provider secrets encrypted at rest.
-4. Validate with `scripts/test_opencode_secure_mcp.py` or a targeted probe before claiming the capability works.
-5. If Codex TUI hangs on `Booting MCP server: opencode_secure`, check the stdio transport notes before changing wrapper security behavior.
+4. Use `diagnostics.mode=on_error` for routine probes and switch to `trace` only when you need opencode startup or provider logs.
+5. Validate with `scripts/test_opencode_secure_mcp.py` or a targeted probe before claiming the capability works.
+6. If Codex TUI hangs on `Booting MCP server: opencode_secure`, check the stdio transport notes before changing wrapper security behavior.
+7. If direct `opencode_secure_run.sh` works but `opencode_run_task` times out, check stdin-inheritance notes before blaming the provider/model.
 
 ## Tools
 
@@ -45,6 +47,7 @@ The interface is intentionally task-shaped, not a raw `opencode` CLI passthrough
 - Read [references/tool-contract.md](references/tool-contract.md) when you need the MCP input/output contract.
 - Read [references/security-boundary.md](references/security-boundary.md) when adjusting how encrypted keys flow into `opencode`.
 - Read [references/stdio-transport-troubleshooting.md](references/stdio-transport-troubleshooting.md) when startup succeeds at the process level but Codex never finishes MCP boot.
+- Read [references/stdin-inheritance-timeout-troubleshooting.md](references/stdin-inheritance-timeout-troubleshooting.md) when direct wrapper execution works but synchronous MCP calls hang or time out.
 
 ## Scripts
 

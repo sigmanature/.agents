@@ -49,13 +49,14 @@ Root detection (non-interactive):
 adb shell 'command -v su >/dev/null 2>&1 && su -c id >/dev/null 2>&1' && echo "su ok" || echo "no su"
 ```
 
-If the device is Magisk-rooted and a compound command still behaves like part of the pipeline ran unprivileged, prefer an explicit root shell form:
+If the device is Magisk-rooted and a compound command still behaves like part of the pipeline ran unprivileged, prefer a single `su -c` command string:
 
 ```bash
-adb shell 'su 0 sh -c "rm -f /data/dalvik-cache/arm64/example.vdex"'
+adb shell su -c 'sh -c "rm -f /data/dalvik-cache/arm64/example.vdex"'
 ```
 
 This is especially useful for `rm`, `mv`, loops, and pipelines where quoting mistakes can silently leave part of the command outside the root shell.
+Some Magisk builds reject `su 0 sh -c ...` with `option requires an argument -- c`; test the exact root form before using it in preservation scripts.
 
 ### 3) `run-as <package>` (no root, app-private files)
 If the app is debuggable, `run-as` can read `/data/data/<pkg>/...`.
@@ -78,7 +79,7 @@ Because `su -c` runs **one command string**, and you still want the device shell
 adb shell su -c 'sh -c "dmesg | tail -n 200 > /data/local/tmp/dmesg_tail.txt"'
 ```
 
-On some Magisk setups, the explicit-UID variant is more robust for write/delete flows:
+On some non-Magisk `su` setups, the explicit-UID variant may be more robust for write/delete flows, but do not assume it works everywhere:
 
 ```bash
 adb shell 'su 0 sh -c "ls -1 /data/dalvik-cache/arm64 | grep Settings | while read f; do rm -f /data/dalvik-cache/arm64/$f; done"'
