@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import textwrap
+import time
 
 
 ROOT_DIR = pathlib.Path(__file__).resolve().parents[1]
@@ -47,6 +48,29 @@ class McpClient:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         self.proc.stdin.write(body + b"\n")
         self.proc.stdin.flush()
+
+
+def start_server_client(env: dict[str, str]) -> tuple[subprocess.Popen[bytes], McpClient]:
+    proc = subprocess.Popen(
+        ["bash", str(ENTRY)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        text=False,
+    )
+    client = McpClient(proc)
+    init = client.request(
+        "initialize",
+        {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "test-client", "version": "0.1"},
+        },
+    )
+    assert init["result"]["serverInfo"]["name"] == "opencode-secure-mcp"
+    client.notify("notifications/initialized", {})
+    return proc, client
 
 
 def main() -> int:
@@ -143,6 +167,18 @@ def main() -> int:
                   printf 'sleepy-stderr-before-timeout\\n' >&2
                   sleep 30
                 fi
+                if [[ "${message}" == "late-ok" ]]; then
+                  printf 'provider-banner\\n' >&2
+                  sleep 2
+                fi
+                if [[ "${message}" == "restart-case" ]]; then
+                  printf 'restart-begin\\n'
+                  sleep 2
+                  printf 'restart-end\\n'
+                fi
+                if [[ "${message}" == "silent-hang" ]]; then
+                  sleep 30
+                fi
                 if [[ "${message}" == "requires-eof" ]]; then
                   cat >/dev/null
                 fi
@@ -156,28 +192,9 @@ def main() -> int:
         env["PATH"] = f"{bin_dir}:{env['PATH']}"
         env["OPENCODE_SECURE_MCP_STATE_DIR"] = str(state_dir)
 
-        proc = subprocess.Popen(
-            ["bash", str(ENTRY)],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            text=False,
-        )
+        proc, client = start_server_client(env)
 
         try:
-            client = McpClient(proc)
-            init = client.request(
-                "initialize",
-                {
-                    "protocolVersion": "2025-03-26",
-                    "capabilities": {},
-                    "clientInfo": {"name": "test-client", "version": "0.1"},
-                },
-            )
-            assert init["result"]["serverInfo"]["name"] == "opencode-secure-mcp"
-            client.notify("notifications/initialized", {})
-
             tools = client.request("tools/list")
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
             expected = {
@@ -281,6 +298,70 @@ def main() -> int:
             assert pathlib.Path(diag["artifact_paths"]["stdout"]).exists()
             assert pathlib.Path(diag["artifact_paths"]["stderr"]).exists()
 
+            handoff_resp = client.request(
+                "tools/call",
+                {
+                    "name": "opencode_run_task",
+                    "arguments": {
+                        "instruction": "late-ok",
+                        "model": "Mify-Aili/tongyi/qwen3.6-plus-2026-04-02",
+                        "encrypted_file": str(encrypted_file),
+                        "pass_file": str(pass_file),
+                        "timeout_sec": 1,
+                        "diagnostics": {
+                            "mode": "on_error",
+                            "persist_artifacts": True,
+                        },
+                    },
+                },
+            )
+            handoff_structured = handoff_resp["result"]["structuredContent"]
+            assert handoff_structured["ok"] is False
+            assert handoff_structured["error"]["code"] == "timeout"
+            assert handoff_structured["job_id"]
+            assert handoff_structured["status"] == "running"
+            assert handoff_structured["timeout_context"]["likely_cause"] == "upstream_or_model_latency"
+            assert handoff_structured["timeout_context"]["saw_output"] is True
+            handoff_job_id = handoff_structured["job_id"]
+            time.sleep(2.5)
+            handoff_job = client.request(
+                "tools/call",
+                {"name": "opencode_get_task", "arguments": {"job_id": handoff_job_id}},
+            )
+            assert handoff_job["result"]["structuredContent"]["job"]["status"] == "succeeded"
+            handoff_collect = client.request(
+                "tools/call",
+                {"name": "opencode_collect_artifacts", "arguments": {"job_id": handoff_job_id, "tail_bytes": 2048}},
+            )
+            assert "ok model=" in handoff_collect["result"]["structuredContent"]["stdout_tail"]
+            assert "message=late-ok" in handoff_collect["result"]["structuredContent"]["stdout_tail"]
+
+            silent_resp = client.request(
+                "tools/call",
+                {
+                    "name": "opencode_run_task",
+                    "arguments": {
+                        "instruction": "silent-hang",
+                        "model": "Mify-Aili/tongyi/qwen3.6-plus-2026-04-02",
+                        "encrypted_file": str(encrypted_file),
+                        "pass_file": str(pass_file),
+                        "timeout_sec": 1,
+                    },
+                },
+            )
+            silent_structured = silent_resp["result"]["structuredContent"]
+            assert silent_structured["ok"] is False
+            assert silent_structured["error"]["code"] == "timeout"
+            assert silent_structured["job_id"]
+            assert silent_structured["status"] == "running"
+            assert silent_structured["timeout_context"]["likely_cause"] == "local_or_wrapper_startup"
+            assert silent_structured["timeout_context"]["saw_output"] is False
+            silent_cancel = client.request(
+                "tools/call",
+                {"name": "opencode_cancel_task", "arguments": {"job_id": silent_structured["job_id"]}},
+            )
+            assert silent_cancel["result"]["structuredContent"]["job"]["status"] == "cancelled"
+
             submit_resp = client.request(
                 "tools/call",
                 {
@@ -307,6 +388,35 @@ def main() -> int:
                 {"name": "opencode_collect_artifacts", "arguments": {"job_id": job_id, "tail_bytes": 2048}},
             )
             assert collect_resp["result"]["structuredContent"]["job_id"] == job_id
+
+            restart_resp = client.request(
+                "tools/call",
+                {
+                    "name": "opencode_submit_task",
+                    "arguments": {
+                        "instruction": "restart-case",
+                        "model": "Mify-Kimi/Pro/moonshotai/Kimi-K2.5",
+                        "encrypted_file": str(encrypted_file),
+                        "pass_file": str(pass_file),
+                        "timeout_sec": 60,
+                    },
+                },
+            )
+            restart_job_id = restart_resp["result"]["structuredContent"]["job_id"]
+            time.sleep(0.5)
+            proc.kill()
+            proc.wait(timeout=10)
+
+            proc, client = start_server_client(env)
+            time.sleep(2.5)
+            restart_get = client.request(
+                "tools/call",
+                {"name": "opencode_get_task", "arguments": {"job_id": restart_job_id}},
+            )
+            restart_structured = restart_get["result"]["structuredContent"]
+            assert restart_structured["job"]["status"] == "succeeded"
+            assert restart_structured["job"]["exit_code"] == 0
+            assert "restart-end" in restart_structured["stdout_tail"]
         finally:
             assert proc.stdin is not None
             proc.stdin.close()

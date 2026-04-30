@@ -69,6 +69,31 @@ When adding buffered-I/O coverage:
 - add `read_then_write` variants through the existing structured knobs rather than custom pre-read code in shell.
 - for GC/writeback long runs, keep environment orchestration in the dedicated runner and reuse `run_matrix_case()` for data verification.
 - for the small two-phase GC case, keep GC triggering in `utils/f2fs_gc.py` and use direct `f2fs_io gc_urgent` instead of sysfs writes.
+- for post-write fs-verity pressure, treat candidate naming and runtime enablement as separate phases: `.V`-style names only mark stable candidates, while actual `enable_fsverity()` must be checked after each concurrent fsync batch for every batched path, not only the current focus path.
+- keep a provider-level regression around that rule in `case/test_artifact_pressure_verity_fsync_plan.py`; do not rely on long guest runs alone to catch batch-wide verity gating bugs.
+
+### Inline Artifact Pressure Workflow Contract
+
+#### Main Workflow
+1. Before running `case/test_inlinecrypt_artifact_pressure.py`, check where `INLINE_ARTIFACT_WORKDIR` resolves and treat `WORKDIR/f2fs.img` as guest rootfs usage unless the workdir was explicitly moved elsewhere.
+2. If prior failed runs exist under `/tmp/inline_verity_pressure_qga/run_*`, pull the failing sample files and a failure manifest to the host before any cleanup.
+3. Reclaim guest rootfs space only after evidence is preserved, then launch or relaunch the pressure loop.
+4. On `SIGBUS` or corruption, correlate the saved sample, `process_meta.json`, and kernel logs before changing the workload.
+
+#### Decision Table
+| Phase | Trigger / Symptom | Action | Verify | On Failure | Workflow Effect |
+|---|---|---|---|---|---|
+| Preflight | `test_inlinecrypt_artifact_pressure.py` is using its default `WORKDIR` path or a custom path under guest `/tmp` | Check guest `df -h /`, inspect `/tmp/inline_verity_pressure_qga/run_*`, and remember that the loop image lives at `WORKDIR/f2fs.img` | Guest rootfs has enough free space for a new 2G image plus evidence files, or old runs have been preserved and removed | Pull failure samples first, then delete old run dirs and/or vacuum guest journals before relaunch | block |
+| Evidence | Previous failed run dirs already exist on guest rootfs | Pull at least the failing tmp/sample file, stage log, metadata, and a manifest of failure directories to the host before deleting anything | Host-side size/hash or comparable integrity check matches the guest files | Keep the guest stopped at evidence collection and do not relaunch until host copies exist | replace |
+
+#### Output Contract
+- phase reached:
+- guest workdir path:
+- guest rootfs usage before run:
+- evidence preserved to host:
+- cleanup applied:
+- workload pid / loop status:
+- unresolved blocker:
 
 ### mmap family
 
@@ -85,6 +110,7 @@ When adding mmap coverage:
 - register the case in the builtin mmap case registry,
 - keep `mkwrite_test.py` and `mmap_wp_fault_test.py` as thin frontends unless they truly need specialized behavior,
 - keep trace-specific reporting separate from generic case execution when possible.
+- when a `MAP_SHARED` writer dies with `SIGBUS` under f2fs pressure, inspect `page_mkwrite_state`, `reserve_block`, and `get_block_locked` for the failing inode before assuming post-writeback corruption or EOF/truncate; large-folio faults can reserve several subpages as `NEW_ADDR` and then fail a later subpage with `err=-28`, leaving a zero tail in the saved sample.
 
 ## Editing Policy
 

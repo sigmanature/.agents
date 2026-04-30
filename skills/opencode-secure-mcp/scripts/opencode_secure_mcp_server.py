@@ -17,6 +17,7 @@ SERVER_VERSION = "0.1.0"
 PROTOCOL_VERSION = "2025-03-26"
 SKILL_ROOT = pathlib.Path(__file__).resolve().parents[1]
 WRAPPER_PATH = SKILL_ROOT / "scripts" / "opencode_secure_run.sh"
+JOB_RUNNER_PATH = SKILL_ROOT / "scripts" / "opencode_secure_job_runner.py"
 STATE_DIR = pathlib.Path(
     os.environ.get("OPENCODE_SECURE_MCP_STATE_DIR", "~/.local/state/opencode-secure-mcp")
 ).expanduser()
@@ -31,6 +32,8 @@ DEBUG_LOG_PATH = pathlib.Path(
 DIAGNOSTIC_MODES = {"off", "on_error", "trace"}
 LOG_LEVELS = {"DEBUG", "INFO", "WARN", "ERROR"}
 FORMAT_MODES = {"default", "json"}
+SYNC_POLL_INTERVAL_SEC = 0.2
+SYNC_HANDOFF_MIN_TIMEOUT_SEC = 300
 
 
 def ensure_dirs() -> None:
@@ -102,6 +105,21 @@ def tail_text(text: str, tail_bytes: int) -> str:
 def write_artifact_text(path: pathlib.Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def read_log_text(log_path: pathlib.Path) -> str:
+    if not log_path.exists():
+        return ""
+    return log_path.read_text(encoding="utf-8", errors="replace")
+
+
+def read_json_file(path: pathlib.Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def diagnostics_schema() -> dict[str, Any]:
@@ -416,12 +434,107 @@ def read_log_tail(log_path: pathlib.Path, tail_bytes: int) -> str:
     return data[-tail_bytes:].decode("utf-8", errors="replace")
 
 
+def sync_handoff_timeout_sec(requested_timeout_sec: int) -> int:
+    return max(requested_timeout_sec, SYNC_HANDOFF_MIN_TIMEOUT_SEC)
+
+
+def build_timeout_context(stdout_text: str, stderr_text: str) -> dict[str, Any]:
+    saw_stdout = bool(stdout_text)
+    saw_stderr = bool(stderr_text)
+    saw_output = saw_stdout or saw_stderr
+    return {
+        "saw_output": saw_output,
+        "saw_stdout": saw_stdout,
+        "saw_stderr": saw_stderr,
+        "likely_cause": "upstream_or_model_latency" if saw_output else "local_or_wrapper_startup",
+    }
+
+
+def start_job(
+    registry: dict[str, Any],
+    *,
+    cmd: list[str],
+    cwd: str | None,
+    timeout_sec: int,
+    diagnostics: dict[str, Any],
+    task_type: str | None,
+    request_id: str | None,
+    tags: list[str],
+    summary: str,
+    run_mode: str,
+    requested_timeout_sec: int | None = None,
+) -> dict[str, Any]:
+    job_id = gen_id("job")
+    job_dir = ARTIFACTS_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = job_dir / "stdout.log"
+    stderr_path = job_dir / "stderr.log"
+    completion_path = job_dir / "completion.json"
+    launch_cmd = [
+        "python3",
+        str(JOB_RUNNER_PATH),
+        "--completion-path",
+        str(completion_path),
+        "--stdout-path",
+        str(stdout_path),
+        "--stderr-path",
+        str(stderr_path),
+    ]
+    if cwd is not None:
+        launch_cmd.extend(["--cwd", cwd])
+    launch_cmd.extend(["--", *cmd])
+    proc = subprocess.Popen(
+        launch_cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    PROCESS_TABLE[job_id] = proc
+
+    job = {
+        "job_id": job_id,
+        "status": "running",
+        "summary": summary,
+        "task_type": task_type,
+        "request_id": request_id,
+        "tags": tags,
+        "command": cmd,
+        "cwd": cwd,
+        "pid": proc.pid,
+        "timeout_sec": timeout_sec,
+        "requested_timeout_sec": requested_timeout_sec if requested_timeout_sec is not None else timeout_sec,
+        "diagnostics": diagnostics,
+        "submitted_at": utc_now(),
+        "started_at": utc_now(),
+        "started_ts": time.time(),
+        "finished_at": None,
+        "exit_code": None,
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+        "completion_path": str(completion_path),
+        "error": None,
+        "run_mode": run_mode,
+    }
+    persist_job(registry, job)
+    return job
+
+
 def persist_job(registry: dict[str, Any], job: dict[str, Any]) -> None:
     registry.setdefault("jobs", {})[job["job_id"]] = job
     save_registry(registry)
 
 
 def pid_alive(pid: int) -> bool:
+    proc_stat = pathlib.Path(f"/proc/{pid}/stat")
+    if proc_stat.exists():
+        try:
+            stat_text = proc_stat.read_text(encoding="utf-8", errors="replace")
+            rparen = stat_text.rfind(")")
+            if rparen != -1 and len(stat_text) > rparen + 2:
+                return stat_text[rparen + 2] != "Z"
+        except Exception:
+            pass
     try:
         os.kill(pid, 0)
     except OSError:
@@ -436,6 +549,16 @@ def refresh_jobs(registry: dict[str, Any]) -> None:
         if job.get("status") != "running":
             continue
         job_id = job["job_id"]
+        completion_path = pathlib.Path(job.get("completion_path", ""))
+        completion = read_json_file(completion_path) if job.get("completion_path") else None
+        if completion is not None:
+            job["exit_code"] = completion.get("exit_code")
+            job["finished_at"] = completion.get("finished_at") or utc_now()
+            job["status"] = completion.get("status") or ("succeeded" if job["exit_code"] == 0 else "failed")
+            job["error"] = completion.get("error")
+            PROCESS_TABLE.pop(job_id, None)
+            changed = True
+            continue
         proc = PROCESS_TABLE.get(job_id)
         timeout_sec = int(job.get("timeout_sec", 0) or 0)
         started_ts = float(job.get("started_ts", 0.0) or 0.0)
@@ -479,71 +602,91 @@ def handle_run_task(arguments: dict[str, Any]) -> dict[str, Any]:
     except ValueError as exc:
         return error_result(str(exc))
 
-    run_dir: pathlib.Path | None = None
-    artifact_paths: dict[str, str] = {}
-    if diagnostics["persist_artifacts"]:
-        run_dir = ARTIFACTS_DIR / gen_id("sync")
-        run_dir.mkdir(parents=True, exist_ok=True)
-        artifact_paths = {
-            "stdout": str(run_dir / "stdout.log"),
-            "stderr": str(run_dir / "stderr.log"),
-        }
+    registry = load_registry()
+    refresh_jobs(registry)
+    job = start_job(
+        registry,
+        cmd=cmd,
+        cwd=cwd,
+        timeout_sec=sync_handoff_timeout_sec(timeout_sec),
+        diagnostics=diagnostics,
+        task_type=arguments.get("task_type"),
+        request_id=arguments.get("request_id"),
+        tags=arguments.get("tags", []),
+        summary="synchronous opencode task started",
+        run_mode="sync",
+        requested_timeout_sec=timeout_sec,
+    )
+    deadline = time.time() + timeout_sec
 
-    try:
-        # Keep opencode off the MCP transport pipe; inheriting stdin can make it wait for EOF forever.
-        proc = subprocess.run(
-            cmd,
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout_text = ensure_text_blob(exc.stdout)
-        stderr_text = ensure_text_blob(exc.stderr)
-        if run_dir is not None:
-            write_artifact_text(pathlib.Path(artifact_paths["stdout"]), stdout_text)
-            write_artifact_text(pathlib.Path(artifact_paths["stderr"]), stderr_text)
-        return {
-            "content": [{"type": "text", "text": f"ERROR: synchronous task timed out after {timeout_sec}s"}],
-            "structuredContent": {
-                "ok": False,
-                "error": {"code": "timeout", "message": f"synchronous task timed out after {timeout_sec}s"},
-                "diagnostics": build_failure_diagnostics(
-                    diagnostics,
-                    cmd,
-                    cwd,
-                    timeout_sec,
-                    stdout_text,
-                    stderr_text,
-                    artifact_paths if artifact_paths else None,
-                ),
-            },
-            "isError": True,
-        }
+    while True:
+        refresh_jobs(registry)
+        job = registry.get("jobs", {}).get(job["job_id"], job)
+        if job.get("status") != "running":
+            break
+        now = time.time()
+        if now >= deadline:
+            stdout_path = pathlib.Path(job["stdout_path"])
+            stderr_path = pathlib.Path(job["stderr_path"])
+            stdout_text = read_log_text(stdout_path)
+            stderr_text = read_log_text(stderr_path)
+            artifact_paths = {"stdout": str(stdout_path), "stderr": str(stderr_path)}
+            return {
+                "content": [{"type": "text", "text": f"ERROR: synchronous task timed out after {timeout_sec}s; background job {job['job_id']} is still running"}],
+                "structuredContent": {
+                    "ok": False,
+                    "job_id": job["job_id"],
+                    "status": "running",
+                    "error": {"code": "timeout", "message": f"synchronous task timed out after {timeout_sec}s"},
+                    "timeout_context": build_timeout_context(stdout_text, stderr_text),
+                    "diagnostics": build_failure_diagnostics(
+                        diagnostics,
+                        cmd,
+                        cwd,
+                        timeout_sec,
+                        stdout_text,
+                        stderr_text,
+                        artifact_paths if diagnostics["persist_artifacts"] else None,
+                    ),
+                },
+                "isError": True,
+            }
+        time.sleep(min(SYNC_POLL_INTERVAL_SEC, deadline - now))
 
-    stdout_text = ensure_text_blob(proc.stdout)
-    stderr_text = ensure_text_blob(proc.stderr)
-    if run_dir is not None:
-        write_artifact_text(pathlib.Path(artifact_paths["stdout"]), stdout_text)
-        write_artifact_text(pathlib.Path(artifact_paths["stderr"]), stderr_text)
+    stdout_path = pathlib.Path(job["stdout_path"])
+    stderr_path = pathlib.Path(job["stderr_path"])
+    stdout_text = read_log_text(stdout_path)
+    stderr_text = read_log_text(stderr_path)
+    artifact_paths = {"stdout": str(stdout_path), "stderr": str(stderr_path)} if diagnostics["persist_artifacts"] else {}
 
     payload = {
         "mode": "sync",
-        "status": "succeeded" if proc.returncode == 0 else "failed",
-        "exit_code": proc.returncode,
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "exit_code": job["exit_code"],
         "stdout": stdout_text,
         "stderr": stderr_text,
         "cwd": cwd,
         "command": cmd,
-        "finished_at": utc_now(),
+        "submitted_at": job["submitted_at"],
+        "started_at": job["started_at"],
+        "finished_at": job["finished_at"],
     }
     if artifact_paths:
         payload["artifact_paths"] = artifact_paths
-    if proc.returncode != 0:
-        payload["error"] = {"code": "nonzero_exit", "message": f"process exited with code {proc.returncode}"}
+    if job["status"] != "succeeded":
+        error_code = "nonzero_exit"
+        error_message = f"process exited with code {job['exit_code']}"
+        if job.get("status") == "timed_out":
+            error_code = "timeout"
+            error_message = job.get("error", {}).get("message", "job exceeded timeout")
+        elif job.get("status") == "cancelled":
+            error_code = "cancelled"
+            error_message = "job was cancelled"
+        elif job.get("status") == "finished_unknown":
+            error_code = "process_lost"
+            error_message = job.get("error", {}).get("message", "job process is no longer alive")
+        payload["error"] = {"code": error_code, "message": error_message}
         if diagnostics["mode"] != "off":
             payload["diagnostics"] = build_failure_diagnostics(
                 diagnostics,
@@ -555,7 +698,7 @@ def handle_run_task(arguments: dict[str, Any]) -> dict[str, Any]:
                 artifact_paths if artifact_paths else None,
             )
         return {
-            "content": [{"type": "text", "text": f"opencode_run_task failed with exit code {proc.returncode}"}],
+            "content": [{"type": "text", "text": f"opencode_run_task failed with status {job['status']}"}],
             "structuredContent": {"ok": False, **payload},
             "isError": True,
         }
@@ -570,53 +713,22 @@ def handle_submit_task(arguments: dict[str, Any]) -> dict[str, Any]:
         cmd, cwd, timeout_sec, diagnostics = build_wrapper_command(arguments)
     except ValueError as exc:
         return error_result(str(exc))
-
-    job_id = gen_id("job")
-    job_dir = ARTIFACTS_DIR / job_id
-    job_dir.mkdir(parents=True, exist_ok=True)
-    stdout_path = job_dir / "stdout.log"
-    stderr_path = job_dir / "stderr.log"
-    stderr_path.touch()
-
-    stdout_handle = stdout_path.open("wb")
-    # Background jobs need the same isolation from MCP stdin as synchronous runs.
-    proc = subprocess.Popen(
-        cmd,
+    job = start_job(
+        registry,
+        cmd=cmd,
         cwd=cwd,
-        stdin=subprocess.DEVNULL,
-        stdout=stdout_handle,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
+        timeout_sec=timeout_sec,
+        diagnostics=diagnostics,
+        task_type=arguments.get("task_type"),
+        request_id=arguments.get("request_id"),
+        tags=arguments.get("tags", []),
+        summary="background opencode task started",
+        run_mode="background",
     )
-    stdout_handle.close()
-    PROCESS_TABLE[job_id] = proc
-
-    job = {
-        "job_id": job_id,
-        "status": "running",
-        "summary": "background opencode task started",
-        "task_type": arguments.get("task_type"),
-        "request_id": arguments.get("request_id"),
-        "tags": arguments.get("tags", []),
-        "command": cmd,
-        "cwd": cwd,
-        "pid": proc.pid,
-        "timeout_sec": timeout_sec,
-        "diagnostics": diagnostics,
-        "submitted_at": utc_now(),
-        "started_at": utc_now(),
-        "started_ts": time.time(),
-        "finished_at": None,
-        "exit_code": None,
-        "stdout_path": str(stdout_path),
-        "stderr_path": str(stderr_path),
-        "error": None,
-    }
-    persist_job(registry, job)
     return success_result(
-        f"submitted background job {job_id}",
+        f"submitted background job {job['job_id']}",
         {
-            "job_id": job_id,
+            "job_id": job["job_id"],
             "status": job["status"],
             "stdout_path": job["stdout_path"],
             "submitted_at": job["submitted_at"],
@@ -643,6 +755,7 @@ def handle_get_task(arguments: dict[str, Any]) -> dict[str, Any]:
         {
             "job": job,
             "stdout_tail": read_log_tail(pathlib.Path(job["stdout_path"]), 4096),
+            "stderr_tail": read_log_tail(pathlib.Path(job["stderr_path"]), 4096),
         },
     )
 
@@ -691,13 +804,16 @@ def handle_collect_artifacts(arguments: dict[str, Any]) -> dict[str, Any]:
     if job is None:
         return error_result(f"unknown job_id: {job_id}", code="not_found")
     stdout_path = pathlib.Path(job["stdout_path"])
+    stderr_path = pathlib.Path(job["stderr_path"])
     payload = {
         "job_id": job_id,
         "status": job["status"],
         "artifacts": [
             {"kind": "stdout", "path": str(stdout_path), "exists": stdout_path.exists()},
+            {"kind": "stderr", "path": str(stderr_path), "exists": stderr_path.exists()},
         ],
         "stdout_tail": read_log_tail(stdout_path, tail_bytes),
+        "stderr_tail": read_log_tail(stderr_path, tail_bytes),
     }
     return success_result(f"collected artifacts for {job_id}", payload)
 

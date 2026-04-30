@@ -205,6 +205,31 @@ python3 .agents/tools/qga_exec.py --sock /tmp/qga.sock '<guest command>'
 4. Always capture the exit code and report it.
 5. If the QGA probe succeeds but background launch is flaky in this workspace, keep the VM process alive through a foreground PTY host session and still use QGA as the only guest command channel.
 
+### QGA evidence pull policy
+
+When a guest-side failure leaves important evidence under guest-local paths and SSH/scp is unavailable:
+
+1. Try small text evidence first through `qga_exec.py` with host-side redirection:
+
+```bash
+python3 .agents/tools/qga_exec.py --sock /tmp/qga.sock 'cat /tmp/test.log' > /tmp/test.log
+```
+
+2. If the file is large or binary, use QGA file-read instead of streaming through guest-exec:
+
+```bash
+python3 .agents/tools/qga_pull_file.py --sock /tmp/qga.sock /guest/path/file.img /host/path/file.img
+```
+
+3. Verify the pulled artifact with size and hash on both sides before cleaning the guest:
+
+```bash
+sha256sum /host/path/file.img
+python3 .agents/tools/qga_exec.py --sock /tmp/qga.sock 'sha256sum /guest/path/file.img; stat -c "%s %n" /guest/path/file.img'
+```
+
+Use this path when 9p/shared-directory writes from guest fail with `Operation not permitted`; host-created files in the shared directory do not prove the guest can create large artifacts there.
+
 ### SSH execution policy (when selected)
 
 - For non-interactive guest operations, prefer SSH command injection instead of opening an interactive terminal.
@@ -232,6 +257,8 @@ When these scripts are available under this skill's `scripts/` directory, prefer
   reference: [`references/script-vm_start_bg.md`](references/script-vm_start_bg.md)
 - `scripts/qga_exec.py`:
   reference: [`references/script-qga_exec.md`](references/script-qga_exec.md)
+- `scripts/qga_pull_file.py`:
+  reference: [`references/script-qga_pull_file.md`](references/script-qga_pull_file.md)
 - `scripts/vm_stop.sh`:
   reference: [`references/script-vm_stop.md`](references/script-vm_stop.md)
 - `scripts/vm_ssh.sh`:

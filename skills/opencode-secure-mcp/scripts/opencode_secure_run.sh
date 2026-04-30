@@ -6,7 +6,7 @@ DEFAULT_PASS_FILE="${HOME}/.opencode/pass.txt"
 DEFAULT_ENCRYPTED_FILE="${HOME}/.opencode/auth.key.enc"
 OPENSSL_CIPHER="aes-256-cbc"
 OPENSSL_ITER=200000
-DEFAULT_MODEL="Mify-Kimi/Pro/moonshotai/Kimi-K2.5"
+DEFAULT_MODEL="Mify-Aili/tongyi/deepseek-v4-flash"
 DEFAULT_ENV_KEYS=(
   "MIFY_API_KEY"
   "OPENAI_API_KEY"
@@ -25,7 +25,7 @@ Options:
   --encrypted-file <path>  Encrypted key file created by codex_secure_launch.sh init.
                            default: ~/.opencode/auth.key.enc
   --model <provider/model> Model passed to opencode run.
-                           default: Mify-Kimi/Pro/moonshotai/Kimi-K2.5
+                           default: Mify-Aili/tongyi/deepseek-v4-flash
   --pass-env <name>        Passphrase environment variable name.
                            default: CODEX_AUTH_PASSPHRASE
   --pass-file <path>       Passphrase file read only by this wrapper when the env var is unset.

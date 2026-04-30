@@ -52,7 +52,8 @@ shell_quote() {
 }
 
 safe_serial="$(printf '%s' "$SERIAL" | tr -c 'A-Za-z0-9_.-' '_')"
-device_dir="/data/local/tmp/f2fs_preserve_${safe_serial}_$(date +%Y%m%d_%H%M%S)"
+unique_id="$(printf '%s_%s_%s' "$(date +%Y%m%d_%H%M%S)" "$$" "$(date +%N 2>/dev/null || printf 0)")"
+device_dir="/data/local/tmp/f2fs_preserve_${safe_serial}_${unique_id}"
 device_tar="${device_dir}.tgz"
 
 read -r -d '' device_body <<'EOS' || true
@@ -76,7 +77,7 @@ if ln "$FILE" "$hard" 2>"$KEEP/hardlink.stderr.txt"; then
 else
   echo "hardlink_status=failed path=$hard" >>"$KEEP/preserve_manifest.txt"
   parent="$(dirname "$FILE")"
-  parent_hard="$parent/.f2fs_preserved_inode_${ino}_$(date +%s).hardlink"
+  parent_hard="$parent/.f2fs_preserved_inode_${ino}_$(date +%s)_$$.hardlink"
   if ln "$FILE" "$parent_hard" 2>"$KEEP/hardlink_parent.stderr.txt"; then
     echo "hardlink_parent_status=ok path=$parent_hard" >>"$KEEP/preserve_manifest.txt"
     hard_src="$parent_hard"
@@ -85,15 +86,28 @@ else
   fi
 fi
 if [ -n "$hard_src" ]; then
-  cp -a "$hard_src" "$copy"
-  echo "copy_status=ok source=$hard_src path=$copy" >>"$KEEP/preserve_manifest.txt"
+  if cp -a "$hard_src" "$copy" 2>"$KEEP/copy.stderr.txt"; then
+    echo "copy_status=ok source=$hard_src path=$copy" >>"$KEEP/preserve_manifest.txt"
+  else
+    echo "copy_status=failed_or_partial source=$hard_src path=$copy" >>"$KEEP/preserve_manifest.txt"
+  fi
 else
-  cp -a "$FILE" "$copy"
-  echo "copy_status=ok source=$FILE path=$copy" >>"$KEEP/preserve_manifest.txt"
+  if cp -a "$FILE" "$copy" 2>"$KEEP/copy.stderr.txt"; then
+    echo "copy_status=ok source=$FILE path=$copy" >>"$KEEP/preserve_manifest.txt"
+  else
+    echo "copy_status=failed_or_partial source=$FILE path=$copy" >>"$KEEP/preserve_manifest.txt"
+  fi
 fi
 stat -c "after_orig path=%n inode=%i size=%s blocks512=%b" "$FILE" >>"$KEEP/preserve_manifest.txt" || true
 stat -c "hardlink path=%n inode=%i size=%s blocks512=%b" "$hard_src" >>"$KEEP/preserve_manifest.txt" 2>/dev/null || true
 stat -c "copy path=%n inode=%i size=%s blocks512=%b" "$copy" >>"$KEEP/preserve_manifest.txt"
+orig_size="$(stat -c %s "$FILE" 2>/dev/null || echo unknown)"
+copy_size="$(stat -c %s "$copy" 2>/dev/null || echo unknown)"
+if [ "$orig_size" = "$copy_size" ]; then
+  echo "copy_size_status=full size=$copy_size" >>"$KEEP/preserve_manifest.txt"
+else
+  echo "copy_size_status=partial_or_short orig_size=$orig_size copy_size=$copy_size" >>"$KEEP/preserve_manifest.txt"
+fi
 if command -v sha256sum >/dev/null 2>&1; then
   : >"$KEEP/sha256sum.txt"
   sha256sum "$FILE" >>"$KEEP/sha256sum.txt" 2>>"$KEEP/sha256sum.stderr.txt" || echo "sha256_orig_status=failed path=$FILE" >>"$KEEP/preserve_manifest.txt"
@@ -106,7 +120,26 @@ else
   echo "sha256_status=unavailable" >>"$KEEP/preserve_manifest.txt"
 fi
 cd "$(dirname "$KEEP")"
-tar -czf "$TAR" "$(basename "$KEEP")"
+PACK="${KEEP}.hostpack"
+rm -rf "$PACK"
+mkdir -p "$PACK"
+for item in "$KEEP"/*; do
+  case "$item" in
+    *.hardlink)
+      echo "host_archive_excludes_hardlink=$item" >>"$KEEP/preserve_manifest.txt"
+      ;;
+  esac
+done
+for item in "$KEEP"/*; do
+  case "$item" in
+    *.hardlink)
+      ;;
+    *)
+      cp -a "$item" "$PACK"/ 2>/dev/null || true
+      ;;
+  esac
+done
+tar -czf "$TAR" "$(basename "$PACK")"
 chmod 0644 "$TAR"
 EOS
 

@@ -148,6 +148,33 @@ adb exec-out run-as com.example.app cat files/crash.log > crash.log
 
 ## Log capture patterns
 
+### Long-running host wrappers from an agent shell
+
+For a host-side wrapper that must survive after the launching shell exits
+(`adb logcat` streamers, reboot loops, pressure loops), detach it from the
+launching process group.  In agent PTY/exec environments, plain
+`nohup wrapper.sh &` can still be killed during process-group cleanup before it
+reaches its first iteration.
+
+Prefer:
+
+```bash
+OUT=output/run_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$OUT"
+setsid -f ./scripts/my_adb_pressure_loop.sh \
+  --serial "$SERIAL" \
+  --out "$OUT" \
+  >"$OUT/launcher.stdout.log" \
+  2>"$OUT/launcher.stderr.log"
+```
+
+Verify immediately:
+
+```bash
+pgrep -af 'my_adb_pressure_loop.sh|adb .* logcat'
+sed -n '1,80p' "$OUT/pressure.status.log" 2>/dev/null || true
+```
+
 ### Stream logcat during a run (host-side)
 
 ```bash
@@ -158,6 +185,15 @@ Optional: clear buffers first (destructive):
 
 ```bash
 adb logcat -c
+```
+
+Inside long-running reboot/pressure wrappers, close stdin on one-shot adb
+calls so they cannot consume a surrounding loop or controlling shell. If
+host-side `adb logcat -c` behaves poorly in the wrapper, use a device-side clear
+with stdin closed and log the result:
+
+```bash
+timeout 8s adb -s "$SERIAL" shell 'logcat -b all -c' </dev/null
 ```
 
 ### dumpsys snapshots
@@ -174,12 +210,38 @@ adb shell dumpsys dropbox --print > dumpsys_dropbox_print.txt
 adb bugreport bugreport.zip
 ```
 
+### Recover an updated system app from a corrupt `/data/app` update
+
+If an updated system app repeatedly crashes from its updated APK path, and
+clearing regenerated ART artifacts does not stop the crash, preserve the update
+payload before falling back to the system package:
+
+```bash
+PKG=com.google.android.gms
+APPDIR=$(adb shell "pm path $PKG" | tr -d '\r' | sed -n 's#^package:##p' | sed -n '1p' | xargs dirname)
+
+# Preserve these with the local mutable-file preserve helper before rollback.
+adb shell "su -c 'stat -c \"%i %h %s %y %n\" \"$APPDIR/base.apk\" \"$APPDIR/base.dm\" 2>/dev/null || true'"
+
+adb shell "su -c 'am force-stop $PKG; cmd package uninstall-system-updates $PKG; sync'"
+adb shell "pm path $PKG"
+```
+
+Verify that `pm path` now points to `/product` or `/system`, `dumpsys package`
+no longer reports `UPDATED_SYSTEM_APP`, and a cleared-logcat relaunch window has
+no matching `am_crash`, Java linkage error, or native crash.
+
 ---
 
 ## Common anti-patterns
 
 - **Running `adb` inside `adb shell`**:
   - ❌ `adb shell adb pull ...` (doesn’t work; adb is host-side)
+
+- **Calling adb inside a `while read ... < file` loop without closing stdin**:
+  - ❌ `while read p; do adb shell "test -f '$p'"; done < suspect_paths.txt`
+  - ✅ `while read p; do adb shell "test -f '$p'" </dev/null; done < suspect_paths.txt`
+  - Why: `adb` may inherit and consume the loop's input fd, so only the first line is processed.
 
 - **Assuming `adb root` exists** on retail:
   - ✅ prefer `su -c` detection

@@ -1,0 +1,24 @@
+{
+  "skill_name": "fsstress-qga-deploy",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "当前 learn_os 后台 QEMU 已经在跑，帮我通过 QGA 部署 fsstress 并做一个短 smoke。",
+      "expected_output": "The agent should reuse the running QGA socket, avoid starting a new VM, expose fsstress through /usr/local/bin/fsstress, run a timeout-protected smoke, and report the socket/path/exit-code evidence.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "fsstress 不在 PATH，但我记得 xfstests 已经装过。帮我修好。",
+      "expected_output": "The agent should check /var/lib/xfstests/ltp/fsstress and /root/xfstests-dev/ltp/fsstress before reinstalling xfstests, then relink and smoke-test.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "我要在 F2FS mount 上跑 fsstress，不要只在 /tmp 证明工具可用。",
+      "expected_output": "The agent should first verify the requested target filesystem with findmnt, distinguish tool smoke from F2FS workload evidence, and only report F2FS coverage when the target is really F2FS.",
+      "files": []
+    }
+  ]
+}
+

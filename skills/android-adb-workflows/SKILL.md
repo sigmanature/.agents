@@ -8,6 +8,7 @@ description: generate correct, runnable adb commands and host-side bash scripts 
 This skill is a **router + toolkit**:
 
 - **General ADB execution rules** (host vs device, `su -c`, quoting/redirection, root-only artifacts): see `references/adb_execution_reference.md`.
+- **Long-running wrapper caveats** (`setsid`, closed stdin for nested adb calls, wrapper-safe log clearing): see `references/adb_execution_reference.md`.
 - **Monkey automation + log collection** (repeatable run, timestamped folder): use `scripts/run_monkey_and_collect_logs.sh`.
 - **Package name discovery** (list/search/current foreground app): use `scripts/adb_pkg.sh`.
 

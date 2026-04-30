@@ -33,6 +33,28 @@ Do not skip the first two dependencies for this skill.
 - Kernel source is a git repo (for temporary debug branch + one reversible commit).
 - Guest access may use SSH or QGA; choose per `f2fs-qemu-agent-pipeline` policy.
 
+## Workflow Contract
+
+### Main Workflow
+1. Normalize context and identify the source tree, `O=` build tree, target subsystem, and reproducer.
+2. Verify runtime prerequisites that gate the target path before spending time on workload debugging.
+3. Apply or refine instrumentation, then build the changed kernel.
+4. Run the reproducer and capture bounded evidence.
+5. Correlate evidence and choose the smallest next iteration.
+
+### Decision Table
+| Phase | Trigger / Symptom | Action | Verify | On Failure | Workflow Effect |
+|---|---|---|---|---|---|
+| Preflight | Repro depends on post-write fs-verity enablement, verity reads, or verity-tagged writeback coverage | In the guest, verify `CONFIG_FS_VERITY=y` from `/proc/config.gz` or `/boot/config-*`, then run a fresh plain-file `f2fs_io set_verity` probe on a fresh `mkfs.f2fs -O encrypt,verity` image mounted with the intended options | Guest config shows `CONFIG_FS_VERITY=y` and the plain-file probe succeeds | Treat the run as blocked by kernel config/runtime prerequisites; enable the config in the host build output, rebuild, reboot, and re-run preflight before touching workload logic | block |
+
+### Output Contract
+- phase reached:
+- decision path taken:
+- verification evidence:
+- fallback used:
+- unresolved blocker:
+- next workflow step:
+
 ## Orchestration loop
 
 ### Step 0: Normalize context

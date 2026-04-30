@@ -18,6 +18,7 @@ It matches the common “Pixel user build” reality:
    - inode whitelist is the simplest: only log when `inode->i_ino == target`
 4) **Prefer a runtime knob**
    - sysfs-backed `dbg_*_ino1/ino2` fields on `struct f2fs_sb_info`
+   - optional `dbg_wcf_verity_only=1` when you only want rows for `fsverity_active()` or `FI_VERITY_IN_PROGRESS`
 5) **Be bold with printk level when needed**
    - if logs must survive busy dmesg, use `pr_emerg` temporarily
 
@@ -70,6 +71,7 @@ adb shell su -c 'stat -c "%i %n" /data/user/0/<pkg>/databases/<db>-wal'
 # example (adjust mount sysfs path):
 adb shell su -c 'echo 40974 > /sys/fs/f2fs/<dev>/dbg_wcf_ino1'
 adb shell su -c 'echo 40975 > /sys/fs/f2fs/<dev>/dbg_wcf_ino2'
+adb shell su -c 'echo 1 > /sys/fs/f2fs/<dev>/dbg_wcf_verity_only'
 ```
 
 3) Grep the kernel log:
@@ -84,4 +86,4 @@ adb shell su -c 'dmesg -T | grep -E \"^.*F2FS_WCF\"'
 - Frequent `beyond_eof=1` on folios you expected to be fully inside `i_size`
 - `endpos_trimmed=1` combined with a write that should have been aligned to page boundaries
 - Any non-zero `err` from `write_single_data_folio` for the target inode
-
+- If `dbg_wcf_verity_only=1`, absence of rows for a V-tagged path means the inode never reached `fsverity_active()` and never entered `FI_VERITY_IN_PROGRESS` during the captured window

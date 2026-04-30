@@ -1,6 +1,6 @@
 ---
 name: word-toc-human-in-the-loop
-description: Use when updating a thesis or dissertation Word TOC after body edits, especially when the document has a hand-tuned TOC template, page numbers must be recalculated by Windows Word, or the user mentions dirty TOC, Word TOC, prepared/restyled docx, thesis目录, 目录页码不对, or wants the agent to handle everything except the manual Word refresh step.
+description: Use when updating a thesis or dissertation Word TOC after body edits, especially when the document has a hand-tuned TOC template, page numbers must be recalculated by Windows Word, the workflow must survive cross-device migration, or the user mentions dirty TOC, Word TOC, prepared/restyled docx, thesis目录, 目录页码不对, or wants the agent to handle everything except the manual Word refresh step.
 ---
 
 # Word TOC Human-In-The-Loop
@@ -11,19 +11,37 @@ Use this workflow when the thesis source of truth is a `.docx` file and the TOC 
 
 The agent owns structure checks, `prepare`, `restyle`, and status reporting. The user owns the one step Linux tooling should not fake: opening the doc in Windows Word, updating the entire TOC, saving, and doing final visual judgment.
 
-## Default Paths
+## Bundled Assets
 
-Prefer these defaults unless the user gives a different current document:
+This skill is now self-contained for migration:
 
-- workflow CLI: `/home/nzzhao/graduate_paper/graduate_paper/word_toc_workflow.py`
-- style template truth: `/home/nzzhao/下载/Final_Thesis_WordTOC_Spec_FINAL_toc_matched_v6.docx`
-- deeper repo workflow note: `/home/nzzhao/graduate_paper/graduate_paper/WORD_TOC_WORKFLOW.md`
+- workflow CLI: `scripts/word_toc_workflow.py`
+- portability self-check: `scripts/selfcheck.py`
+- workflow reference: `references/workflow.md`
+- migration notes: `references/migration.md`
+- visual acceptance: `references/visual-checklist.md`
+- legacy resource map: `references/resource-map.md`
+- legacy snapshots:
+  - `references/legacy/thesis.py`
+  - `references/legacy/thesis_wordtoc_wrapper.py`
 
-Important distinction:
+Read `references/migration.md` when the user is moving this workflow to a new machine.
 
-- `matched_v6.docx` is the style template truth.
-- The user's latest edited or Word-updated `.docx` is the content truth.
-- Do not assume `matched_v6.docx` is still the current working thesis after the user says they edited a newer file.
+## Current-Doc vs Template-Doc
+
+Do not hardcode local machine paths.
+
+Always separate:
+
+- current working thesis docx: the user's latest edited or Word-updated document
+- template docx: the style truth used for `restyle`
+
+On a new device, these two files are user assets and must be supplied or migrated separately. The skill bundle does not assume they live under any fixed directory.
+
+Example naming convention only:
+
+- `thesis.current.docx`
+- `thesis.template.docx`
 
 ## When To Stop And Hand Off
 
@@ -52,7 +70,7 @@ If multiple thesis-like files exist, prefer the newest file the user explicitly 
 Run:
 
 ```bash
-python3 /home/nzzhao/graduate_paper/graduate_paper/word_toc_workflow.py audit CURRENT.docx
+python3 ~/.agents/skills/word-toc-human-in-the-loop/scripts/word_toc_workflow.py audit CURRENT.docx
 ```
 
 Interpretation:
@@ -66,7 +84,7 @@ Interpretation:
 If the current doc is still a manual-TOC baseline, run:
 
 ```bash
-python3 /home/nzzhao/graduate_paper/graduate_paper/word_toc_workflow.py prepare CURRENT.docx --output CURRENT.prepared.docx
+python3 ~/.agents/skills/word-toc-human-in-the-loop/scripts/word_toc_workflow.py prepare CURRENT.docx --output CURRENT.prepared.docx
 ```
 
 This step is agent-owned. It should:
@@ -93,7 +111,7 @@ Do not continue to `restyle` until the user confirms the Word-updated file path.
 Once the user returns a Word-updated docx, run:
 
 ```bash
-python3 /home/nzzhao/graduate_paper/graduate_paper/word_toc_workflow.py restyle WORD_UPDATED.docx --template /home/nzzhao/下载/Final_Thesis_WordTOC_Spec_FINAL_toc_matched_v6.docx --output WORD_UPDATED.restyled.docx
+python3 ~/.agents/skills/word-toc-human-in-the-loop/scripts/word_toc_workflow.py restyle WORD_UPDATED.docx --template TEMPLATE.docx --output WORD_UPDATED.restyled.docx
 ```
 
 Then run `audit` again on the output and report whether:
@@ -112,6 +130,7 @@ Even when the workflow succeeds, explicitly say the remaining manual checks are:
 - whether chapter 1 starts at page `1`
 
 Read `/home/nzzhao/.agents/skills/word-toc-human-in-the-loop/references/visual-checklist.md` when you need the exact checklist.
+Read `references/visual-checklist.md` when you need the exact checklist.
 
 ## User-Owned Steps
 
@@ -129,6 +148,7 @@ The user must do these manually:
 - do not claim the final page numbers are correct before a Windows Word refresh happened
 - do not confuse the template truth with the current working thesis
 - do not promise pixel-identical reproduction of a hand-tuned TOC for every long line
+- do not assume the old thesis repo exists on the target machine just because this skill was migrated
 
 ## Roman Numeral Boundary
 
@@ -144,6 +164,25 @@ Current workflow does not by itself guarantee:
 - front-matter page format changes such as `I`, `II`, `III`
 
 Treat Roman numeral formatting as a follow-up step only when the user explicitly asks for it.
+
+## Migration Notes
+
+For cross-device migration, tell the user three separate things may need to move:
+
+- this skill directory
+- the current thesis docx
+- the template docx used for `restyle`
+
+Then tell them to run:
+
+```bash
+python3 ~/.agents/skills/word-toc-human-in-the-loop/scripts/selfcheck.py
+```
+
+If fonts are missing or the machine is different, ask them to read `references/migration.md` and, if needed, set:
+
+- `WORD_TOC_SONG_FONTS`
+- `WORD_TOC_HEI_FONTS`
 
 ## Expected Reply Shape
 
