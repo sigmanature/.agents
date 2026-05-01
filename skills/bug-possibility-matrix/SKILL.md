@@ -134,6 +134,10 @@ Instead:
 2. show the same probe emitted on other comparable paths,
 3. show the target sample's own relevant lines.
 
+When a probe logs local variables, first verify where each variable is initialized and on which exits it is updated.
+
+Do not infer a branch solely from a logged field if an earlier return can leave that field at its default initializer.
+
 ## Static-Code Rule
 
 When the goal is static analysis, prefer:

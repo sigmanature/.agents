@@ -109,3 +109,26 @@ Unless the user asks otherwise, respond in this structure:
 - [references/fscrypt_open_einval_pkgxml.md](references/fscrypt_open_einval_pkgxml.md) (recipe for `/data/system/packages.xml` `open failed: EINVAL`)
 - [references/fsverity_open_einval_pkgxml.md](references/fsverity_open_einval_pkgxml.md) (recipe for `/data/system/packages.xml` `open failed: EINVAL` due to fs-verity)
 - [references/pixel-kleaf-build-gotchas.md](references/pixel-kleaf-build-gotchas.md) (Bazel/Kleaf build pitfalls in local Pixel checkouts)
+
+## Workflow Contract
+
+### Main Workflow
+1. Pin the failing symptom to one concrete outer return site and log line, such as `page_mkwrite_state ... err=-5 ret=0x2`.
+2. Instrument the outer site first so the next repro distinguishes branch-local reasons instead of only restating the final errno.
+3. Instrument the immediate upstream state setter that can force that branch, such as `CP_ERROR_FLAG` or `mapping_set_error(-EIO)`.
+4. Build and run one repro with only those linked layers instrumented.
+5. Update the bug matrix with the new causal chain before widening the log surface.
+
+### Decision Table
+| Phase | Trigger / Symptom | Action | Verify | On Failure | Workflow Effect |
+|---|---|---|---|---|---|
+| Trace design | Filesystem `mmap` write reports `page_mkwrite ... err=-EIO` but inner cause is open | Add one log at the `page_mkwrite` early `-EIO` branch selector, one log at the first `mapping_set_error(-EIO)` producer for the same subsystem, and one log at every `CP_ERROR_FLAG` setter reachable from that producer | The next repro must show an ordered chain such as `write_end_io_eio` or `page_eio_cp_error` or `cp_error_set` before `page_mkwrite_eio_source source=cp_error` | If `page_mkwrite_eio_source` fires without any preceding upstream setter log, widen only from the hit branch's direct callers, not the whole writeback stack | replace ad-hoc EIO logging with a fixed three-layer tracing pattern |
+
+### Output Contract
+- phase reached:
+- outer symptom pinned:
+- branch selector sites added:
+- upstream setter sites added:
+- build verification:
+- repro evidence chain:
+- next widening step:
