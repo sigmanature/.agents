@@ -1,0 +1,17 @@
+{
+  "name": "opencode_secure",
+  "description": "Wrapper-backed local MCP server for secure opencode task execution.",
+  "transport": "stdio",
+  "command": "bash",
+  "args": [
+    "~/.agents/skills/opencode-secure-mcp/scripts/opencode_secure_mcp_entry.sh"
+  ],
+  "vendors": [
+    "codex",
+    "claude",
+    "roo"
+  ],
+  "roo": {
+    "disabled": false
+  }
+}

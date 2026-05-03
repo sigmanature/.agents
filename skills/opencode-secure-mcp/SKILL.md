@@ -23,27 +23,30 @@ This skill owns the reusable bottom-layer pieces for secure `opencode` execution
 ## Primary Workflow
 
 1. Confirm the user actually wants a reusable bottom-layer capability, not just a one-off wrapper launch.
-2. Register the local stdio MCP server with Codex through `scripts/register_opencode_secure_mcp.sh` when needed.
-3. Default to `Mify-Aili/tongyi/deepseek-v4-flash` unless the task or user requires another model.
-4. Use the MCP tools for task execution; keep provider secrets encrypted at rest.
-5. Use `diagnostics.mode=on_error` for routine probes and switch to `trace` only when you need opencode startup or provider logs.
-6. Validate with `scripts/test_opencode_secure_mcp.py` or a targeted probe before claiming the capability works.
-7. If Codex TUI hangs on `Booting MCP server: opencode_secure`, check the stdio transport notes before changing wrapper security behavior.
-8. If direct `opencode_secure_run.sh` works but `opencode_run_task` times out, check stdin-inheritance notes before blaming the provider/model.
-9. When model resolution fails, look up the exact validated full provider/model string in `~/.local/state/opencode/model.json` before retrying. Do not guess from the shortened UI display name alone.
+2. For cross-device or cross-vendor migration, register from the top-level manifest through `python3 ~/.agents/install_mcps.py opencode_secure --scope user --vendor codex`; use `--all` or repeat `--vendor` when intentionally installing every manifest/vendor.
+3. Use `scripts/register_opencode_secure_mcp.sh` only as the Codex-only fallback when the top-level MCP installer is unavailable.
+4. Default to `Mify-Aili/tongyi/deepseek-v4-flash` unless the task or user requires another model.
+5. Use the MCP tools for task execution; keep provider secrets encrypted at rest.
+6. Use `diagnostics.mode=on_error` for routine probes and switch to `trace` only when you need opencode startup or provider logs.
+7. Validate with `scripts/test_opencode_secure_mcp.py` or a targeted probe before claiming the capability works.
+8. If Codex TUI hangs on `Booting MCP server: opencode_secure`, check the stdio transport notes before changing wrapper security behavior.
+9. If direct `opencode_secure_run.sh` works but `opencode_run_task` times out, check stdin-inheritance notes before blaming the provider/model.
+10. When model resolution fails, look up the exact validated full provider/model string in `~/.local/state/opencode/model.json` before retrying. Do not guess from the shortened UI display name alone.
 
 ## Workflow Contract
 
 ### Main Workflow
-1. Validate the wrapper path first with `diagnostics.mode=on_error`.
-2. Use `opencode_run_task` only for small interactive probes that should finish within the tool-call window.
-3. Use `opencode_submit_task` first for long research, online lookup, multi-agent, or otherwise complex prompts; then poll with `opencode_get_task` and `opencode_collect_artifacts`.
-4. On any timeout, inspect `timeout_context` when available, then continue with `opencode_get_task` and `opencode_collect_artifacts` before deciding whether the fault is upstream latency or local orchestration.
-5. Report whether the task later converged, failed definitively, or required manual cancellation.
+1. Install or restore the MCP registration from `~/.agents/mcps/opencode_secure.json` with `python3 ~/.agents/install_mcps.py opencode_secure --scope user --vendor codex`; expand to more vendors only when the user intentionally wants them.
+2. Validate the wrapper path first with `diagnostics.mode=on_error`.
+3. Use `opencode_run_task` only for small interactive probes that should finish within the tool-call window.
+4. Use `opencode_submit_task` first for long research, online lookup, multi-agent, or otherwise complex prompts; then poll with `opencode_get_task` and `opencode_collect_artifacts`.
+5. On any timeout, inspect `timeout_context` when available, then continue with `opencode_get_task` and `opencode_collect_artifacts` before deciding whether the fault is upstream latency or local orchestration.
+6. Report whether the task later converged, failed definitively, or required manual cancellation.
 
 ### Decision Table
 | Phase | Trigger / Symptom | Action | Verify | On Failure | Workflow Effect |
 |---|---|---|---|---|---|
+| Registration | Cross-device migration, fresh machine setup, or user asks for cross-vendor MCP install | Use `python3 ~/.agents/install_mcps.py opencode_secure --scope user --vendor codex` for Codex-only restore; use `--all` or additional `--vendor` flags only for intentional broader rollout | `codex mcp list --json` shows `opencode_secure` enabled with the entry script under `~/.agents/skills/opencode-secure-mcp/scripts/` | Fall back to `scripts/register_opencode_secure_mcp.sh` for Codex-only registration, then repair the top-level installer/manifest | branch |
 | Probe | `ProviderModelNotFoundError` after passing a shortened display id such as `tongyi/deepseek-v4-flash` or `deepseek-v4-flash` | Resolve the exact validated model string from `~/.local/state/opencode/model.json` `variant`/`recent`; for DeepSeek V4 Flash use `Mify-Aili/tongyi/deepseek-v4-flash` | Local state and/or a prior successful artifact both show the same full provider/model string, and opencode logs display the shortened `tongyi/deepseek-v4-flash` name after resolution | If the corrected full id still fails live, classify the result as provider-side failure such as quota or billing, not model-id guessing failure | replace |
 | Probe | Provider returns quota, billing, or token-limit errors after the model has already resolved to the intended display name | Keep the validated full model string unchanged and treat the result as a provider quota/billing blocker; retry later instead of changing model ids | stderr/artifacts show the intended display name such as `tongyi/deepseek-v4-flash` before the quota failure text | Only revisit model selection when the error is model-resolution related, such as `ProviderModelNotFoundError` | branch |
 | Probe | `opencode_run_task` returns `error.code=timeout` with `job_id` and `timeout_context.saw_output=true` | Treat the sync timeout as a handoff; keep the job alive and poll with `opencode_get_task` / `opencode_collect_artifacts` | Job later reaches `succeeded` or `failed`, and artifact tails show model progress | Cancel the job only if it keeps running without converging or exceeds the caller's patience budget | branch |
@@ -94,3 +97,4 @@ The interface is intentionally task-shaped, not a raw `opencode` CLI passthrough
 - [scripts/opencode_secure_mcp_server.py](scripts/opencode_secure_mcp_server.py)
 - [scripts/register_opencode_secure_mcp.sh](scripts/register_opencode_secure_mcp.sh)
 - [scripts/test_opencode_secure_mcp.py](scripts/test_opencode_secure_mcp.py)
+- [/home/nzzhao/.agents/install_mcps.py](/home/nzzhao/.agents/install_mcps.py)
