@@ -150,6 +150,39 @@ The user must do these manually:
 - do not promise pixel-identical reproduction of a hand-tuned TOC for every long line
 - do not assume the old thesis repo exists on the target machine just because this skill was migrated
 
+## Body Replacement Formatting Gate
+
+Use this gate when the agent replaces thesis body content, such as regenerating a chapter from Markdown into an existing `.docx`.
+
+## Workflow Contract
+
+### Main Workflow
+1. Start from the current/template thesis `.docx`; do not continue from a visually broken generated copy.
+2. Replace only the intended body range, bounded by real Word heading styles such as `Heading 1`, not by TOC text rows.
+3. Insert new content with the legacy body-format references:
+   - headings: `references/legacy/thesis_wordtoc_wrapper.py` and `references/legacy/thesis.py`
+   - body paragraphs: `references/legacy/thesis.py`
+   - figures, captions, tables, and code blocks: `references/legacy/thesis.py`
+4. Validate body formatting before any TOC handoff.
+5. Report / hand off for Windows Word `更新整个目录` only after the body-format checks pass.
+
+### Decision Table
+| Phase | Trigger / Symptom | Action | Verify | On Failure | Workflow Effect |
+|---|---|---|---|---|---|
+| Preflight | Replacement source is Markdown or another non-Word body source | Load legacy formatting references before writing the `.docx` | Confirm heading/body/figure/code rules are known | Stop and inspect `references/legacy/thesis.py` plus `references/legacy/thesis_wordtoc_wrapper.py` | block |
+| Replacement | Target range could match TOC rows and body headings | Match body chapter boundaries by real Word heading styles, normally `Heading 1` | Print the start/end paragraph text, index, and style | Do not write output; refine the boundary predicate | block |
+| Formatting | Generated body looks structurally valid but visually wrong | Discard the malformed generated copy and regenerate from the current/template `.docx` using legacy rules | Check heading styles, body paragraph 12 pt / 1.5 line spacing / 24 pt first-line indent, figure captions 10.5 pt centered, and code block dark style | Treat the generated copy as invalid; do not ask the user to refresh TOC yet | replace |
+| Formatting | Prose humanization or AIGC cleanup inserts many new Word paragraphs / visible extra returns | Regenerate from the last stable `.docx` with paragraph-preserving replacements; do not split one source paragraph into multiple Word paragraphs unless explicitly requested | Compare source and output paragraph counts plus body-range counts; inspect abstract and chapter-start samples | Discard the split-heavy generated copy and keep it out of the handoff path | replace |
+| Validation | Body was replaced successfully | Run `.docx` integrity check, `audit`, heading/style sampling, and risk-term scan for the edited chapter | Keep command output in the handoff notes | Fix the script or regenerate a fresh copy from the source `.docx` | continue |
+
+### Output Contract
+- phase reached:
+- decision path taken:
+- verification evidence:
+- fallback used:
+- unresolved blocker:
+- next workflow step:
+
 ## Roman Numeral Boundary
 
 Front-matter Roman numeral normalization is a separate concern from TOC synchronization.
