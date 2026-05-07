@@ -34,6 +34,24 @@ LOG_LEVELS = {"DEBUG", "INFO", "WARN", "ERROR"}
 FORMAT_MODES = {"default", "json"}
 SYNC_POLL_INTERVAL_SEC = 0.2
 SYNC_HANDOFF_MIN_TIMEOUT_SEC = 300
+DEFAULT_OPENCODE_MODEL_STATE_PATH = "~/.local/state/opencode/model.json"
+AUTO_MODEL_TOKENS = {"", "auto", "default", "stable", "recent"}
+BUILTIN_MODEL_ALIASES = {
+    "kimi": ("kimi",),
+    "deepseek": ("deepseek",),
+    "qwen": ("qwen",),
+    "glm": ("glm",),
+    "gpt": ("gpt",),
+    "claude": ("claude",),
+    "minimax": ("minimax",),
+}
+
+
+class ModelResolutionError(ValueError):
+    def __init__(self, message: str, *, requested_model: str | None, candidates: list[str]) -> None:
+        super().__init__(message)
+        self.requested_model = requested_model
+        self.candidates = candidates
 
 
 def ensure_dirs() -> None:
@@ -120,6 +138,185 @@ def read_json_file(path: pathlib.Path) -> dict[str, Any] | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def opencode_model_state_path() -> pathlib.Path:
+    return pathlib.Path(
+        os.environ.get("OPENCODE_MODEL_STATE_PATH", DEFAULT_OPENCODE_MODEL_STATE_PATH)
+    ).expanduser()
+
+
+def normalize_model_token(value: str) -> str:
+    return value.strip().casefold()
+
+
+def build_model_candidate(full_id: str, *, source: str) -> dict[str, str]:
+    provider_id, sep, model_path = full_id.partition("/")
+    if not sep or not provider_id.strip() or not model_path.strip():
+        raise ValueError(f"invalid full model id: {full_id}")
+    model_path = model_path.strip()
+    return {
+        "full_id": f"{provider_id.strip()}/{model_path}",
+        "provider_id": provider_id.strip(),
+        "model_path": model_path,
+        "model_leaf": model_path.rsplit("/", 1)[-1],
+        "source": source,
+    }
+
+
+def validated_model_candidates() -> list[dict[str, str]]:
+    state = read_json_file(opencode_model_state_path()) or {}
+    candidates: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add_candidate(full_id: str, *, source: str) -> None:
+        try:
+            candidate = build_model_candidate(full_id, source=source)
+        except ValueError:
+            return
+        normalized = normalize_model_token(candidate["full_id"])
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        candidates.append(candidate)
+
+    recent = state.get("recent")
+    if isinstance(recent, list):
+        for item in recent:
+            if not isinstance(item, dict):
+                continue
+            provider_id = item.get("providerID")
+            model_id = item.get("modelID")
+            if isinstance(provider_id, str) and provider_id.strip() and isinstance(model_id, str) and model_id.strip():
+                add_candidate(f"{provider_id.strip()}/{model_id.strip()}", source="recent")
+
+    variant = state.get("variant")
+    if isinstance(variant, dict):
+        for full_id in variant:
+            if isinstance(full_id, str) and full_id.strip():
+                add_candidate(full_id.strip(), source="variant")
+
+    return candidates
+
+
+def candidate_suggestions(candidates: list[dict[str, str]], limit: int = 5) -> list[str]:
+    return [candidate["full_id"] for candidate in candidates[:limit]]
+
+
+def match_validated_candidate(model: str, candidates: list[dict[str, str]]) -> dict[str, str] | None:
+    normalized = normalize_model_token(model)
+    for candidate in candidates:
+        if normalized == normalize_model_token(candidate["full_id"]):
+            return candidate
+    for candidate in candidates:
+        if normalized == normalize_model_token(candidate["model_path"]):
+            return candidate
+    for candidate in candidates:
+        if normalized == normalize_model_token(candidate["model_leaf"]):
+            return candidate
+    suffix = f"/{normalized}"
+    for candidate in candidates:
+        candidate_full = normalize_model_token(candidate["full_id"])
+        candidate_path = normalize_model_token(candidate["model_path"])
+        if candidate_full.endswith(suffix) or candidate_path.endswith(suffix):
+            return candidate
+    return None
+
+
+def match_builtin_alias(alias: str, candidates: list[dict[str, str]]) -> dict[str, str] | None:
+    keywords = BUILTIN_MODEL_ALIASES.get(alias)
+    if keywords is None:
+        return None
+    normalized_keywords = [normalize_model_token(keyword) for keyword in keywords]
+    for candidate in candidates:
+        haystacks = (
+            normalize_model_token(candidate["full_id"]),
+            normalize_model_token(candidate["model_path"]),
+            normalize_model_token(candidate["model_leaf"]),
+        )
+        if any(keyword in haystack for keyword in normalized_keywords for haystack in haystacks):
+            return candidate
+    return None
+
+
+def resolve_model_argument(raw_model: Any) -> dict[str, str | None]:
+    if raw_model is None:
+        requested_model = ""
+    elif isinstance(raw_model, str):
+        requested_model = raw_model.strip()
+    else:
+        raise ValueError("model must be a non-empty string when provided")
+
+    normalized = normalize_model_token(requested_model)
+    candidates = validated_model_candidates()
+
+    if normalized in AUTO_MODEL_TOKENS:
+        if not candidates:
+            raise ModelResolutionError(
+                "model was omitted or set to auto/default, but no validated local opencode models were found",
+                requested_model=requested_model or None,
+                candidates=[],
+            )
+        return {
+            "requested_model": requested_model or None,
+            "resolved_model": candidates[0]["full_id"],
+            "resolution_source": "recent_default",
+        }
+
+    builtin_alias_match = match_builtin_alias(normalized, candidates)
+    if builtin_alias_match is not None:
+        return {
+            "requested_model": requested_model,
+            "resolved_model": builtin_alias_match["full_id"],
+            "resolution_source": "alias_builtin",
+        }
+
+    validated_match = match_validated_candidate(requested_model, candidates)
+    if validated_match is not None:
+        resolution_source = "explicit" if normalized == normalize_model_token(validated_match["full_id"]) else "recent_match"
+        return {
+            "requested_model": requested_model,
+            "resolved_model": validated_match["full_id"],
+            "resolution_source": resolution_source,
+        }
+
+    if "/" in requested_model:
+        return {
+            "requested_model": requested_model,
+            "resolved_model": requested_model,
+            "resolution_source": "explicit",
+        }
+
+    raise ModelResolutionError(
+        f"could not resolve model '{requested_model}' from local validated opencode models",
+        requested_model=requested_model,
+        candidates=candidate_suggestions(candidates),
+    )
+
+
+def model_resolution_error_result(exc: ModelResolutionError) -> dict[str, Any]:
+    candidate_text = ", ".join(exc.candidates) if exc.candidates else "(none)"
+    requested = exc.requested_model if exc.requested_model else "<auto>"
+    return {
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    f"ERROR: {exc}. requested={requested}. "
+                    f"recent candidates: {candidate_text}"
+                ),
+            }
+        ],
+        "structuredContent": {
+            "ok": False,
+            "error": {"code": "model_resolution_failed", "message": str(exc)},
+            "requested_model": exc.requested_model,
+            "candidate_models": exc.candidates,
+            "builtin_aliases": sorted(BUILTIN_MODEL_ALIASES),
+            "model_state_path": str(opencode_model_state_path()),
+        },
+        "isError": True,
+    }
 
 
 def diagnostics_schema() -> dict[str, Any]:
@@ -329,7 +526,10 @@ def tool_definitions() -> list[dict[str, Any]]:
             "instruction": {"type": "string", "description": "Natural-language task for opencode run."},
             "task_type": {"type": "string", "description": "Optional routing label for the caller."},
             "cwd": {"type": "string", "description": "Working directory for opencode."},
-            "model": {"type": "string", "description": "provider/model string passed to opencode."},
+            "model": {
+                "type": "string",
+                "description": "Optional model selector. Supports full provider/model ids, validated short aliases such as `kimi`, provider-less validated suffixes such as `moonshot/kimi-k2.6`, or empty/`auto`/`default`/`stable` to use the most recent validated local model.",
+            },
             "timeout_sec": {"type": "integer", "minimum": 1, "description": "Maximum runtime in seconds."},
             "request_id": {"type": "string"},
             "tags": {"type": "array", "items": {"type": "string"}},
@@ -381,7 +581,7 @@ def tool_definitions() -> list[dict[str, Any]]:
     ]
 
 
-def build_wrapper_command(arguments: dict[str, Any]) -> tuple[list[str], str | None, int, dict[str, Any]]:
+def build_wrapper_command(arguments: dict[str, Any]) -> tuple[list[str], str | None, int, dict[str, Any], dict[str, str | None]]:
     instruction = arguments.get("instruction", "")
     if not isinstance(instruction, str) or not instruction.strip():
         raise ValueError("instruction must be a non-empty string")
@@ -396,14 +596,22 @@ def build_wrapper_command(arguments: dict[str, Any]) -> tuple[list[str], str | N
     if timeout_sec <= 0:
         raise ValueError("timeout_sec must be positive")
     diagnostics = normalize_diagnostics(arguments)
+    model_resolution = resolve_model_argument(arguments.get("model"))
+    debug_log(
+        "model_resolved "
+        f"requested={model_resolution['requested_model']!r} "
+        f"resolved={model_resolution['resolved_model']!r} "
+        f"source={model_resolution['resolution_source']}"
+    )
 
     cmd = ["bash", str(WRAPPER_PATH)]
-    for opt_name in ("encrypted_file", "pass_file", "pass_env", "model"):
+    for opt_name in ("encrypted_file", "pass_file", "pass_env"):
         opt_value = arguments.get(opt_name)
         if opt_value is not None:
             if not isinstance(opt_value, str) or not opt_value.strip():
                 raise ValueError(f"{opt_name} must be a non-empty string when provided")
             cmd.extend([f"--{opt_name.replace('_', '-')}", opt_value])
+    cmd.extend(["--model", str(model_resolution["resolved_model"])])
 
     env_keys = arguments.get("env_keys") or []
     if not isinstance(env_keys, list) or any(not isinstance(v, str) or not v.strip() for v in env_keys):
@@ -424,7 +632,7 @@ def build_wrapper_command(arguments: dict[str, Any]) -> tuple[list[str], str | N
     if opencode["variant"] is not None:
         cmd.extend(["--variant", opencode["variant"]])
     cmd.append(instruction)
-    return cmd, cwd, timeout_sec, diagnostics
+    return cmd, cwd, timeout_sec, diagnostics, model_resolution
 
 
 def read_log_tail(log_path: pathlib.Path, tail_bytes: int) -> str:
@@ -462,6 +670,7 @@ def start_job(
     tags: list[str],
     summary: str,
     run_mode: str,
+    model_resolution: dict[str, str | None],
     requested_timeout_sec: int | None = None,
 ) -> dict[str, Any]:
     job_id = gen_id("job")
@@ -505,6 +714,9 @@ def start_job(
         "timeout_sec": timeout_sec,
         "requested_timeout_sec": requested_timeout_sec if requested_timeout_sec is not None else timeout_sec,
         "diagnostics": diagnostics,
+        "requested_model": model_resolution["requested_model"],
+        "resolved_model": model_resolution["resolved_model"],
+        "resolution_source": model_resolution["resolution_source"],
         "submitted_at": utc_now(),
         "started_at": utc_now(),
         "started_ts": time.time(),
@@ -598,7 +810,9 @@ def refresh_jobs(registry: dict[str, Any]) -> None:
 def handle_run_task(arguments: dict[str, Any]) -> dict[str, Any]:
     debug_log("handle_run_task")
     try:
-        cmd, cwd, timeout_sec, diagnostics = build_wrapper_command(arguments)
+        cmd, cwd, timeout_sec, diagnostics, model_resolution = build_wrapper_command(arguments)
+    except ModelResolutionError as exc:
+        return model_resolution_error_result(exc)
     except ValueError as exc:
         return error_result(str(exc))
 
@@ -615,6 +829,7 @@ def handle_run_task(arguments: dict[str, Any]) -> dict[str, Any]:
         tags=arguments.get("tags", []),
         summary="synchronous opencode task started",
         run_mode="sync",
+        model_resolution=model_resolution,
         requested_timeout_sec=timeout_sec,
     )
     deadline = time.time() + timeout_sec
@@ -637,6 +852,9 @@ def handle_run_task(arguments: dict[str, Any]) -> dict[str, Any]:
                     "ok": False,
                     "job_id": job["job_id"],
                     "status": "running",
+                    "requested_model": job["requested_model"],
+                    "resolved_model": job["resolved_model"],
+                    "resolution_source": job["resolution_source"],
                     "error": {"code": "timeout", "message": f"synchronous task timed out after {timeout_sec}s"},
                     "timeout_context": build_timeout_context(stdout_text, stderr_text),
                     "diagnostics": build_failure_diagnostics(
@@ -664,6 +882,9 @@ def handle_run_task(arguments: dict[str, Any]) -> dict[str, Any]:
         "job_id": job["job_id"],
         "status": job["status"],
         "exit_code": job["exit_code"],
+        "requested_model": job["requested_model"],
+        "resolved_model": job["resolved_model"],
+        "resolution_source": job["resolution_source"],
         "stdout": stdout_text,
         "stderr": stderr_text,
         "cwd": cwd,
@@ -710,7 +931,9 @@ def handle_submit_task(arguments: dict[str, Any]) -> dict[str, Any]:
     registry = load_registry()
     refresh_jobs(registry)
     try:
-        cmd, cwd, timeout_sec, diagnostics = build_wrapper_command(arguments)
+        cmd, cwd, timeout_sec, diagnostics, model_resolution = build_wrapper_command(arguments)
+    except ModelResolutionError as exc:
+        return model_resolution_error_result(exc)
     except ValueError as exc:
         return error_result(str(exc))
     job = start_job(
@@ -724,12 +947,16 @@ def handle_submit_task(arguments: dict[str, Any]) -> dict[str, Any]:
         tags=arguments.get("tags", []),
         summary="background opencode task started",
         run_mode="background",
+        model_resolution=model_resolution,
     )
     return success_result(
         f"submitted background job {job['job_id']}",
         {
             "job_id": job["job_id"],
             "status": job["status"],
+            "requested_model": job["requested_model"],
+            "resolved_model": job["resolved_model"],
+            "resolution_source": job["resolution_source"],
             "stdout_path": job["stdout_path"],
             "submitted_at": job["submitted_at"],
         },

@@ -81,8 +81,29 @@ def main() -> int:
         encrypted_file = tmpdir / "auth.key.enc"
         bin_dir = tmpdir / "bin"
         state_dir = tmpdir / "state"
+        opencode_model_state = tmpdir / "opencode-model.json"
         auth_json.write_text('{"OPENAI_API_KEY":"dummy-test-key"}\n', encoding="utf-8")
         pass_file.write_text("test-passphrase\n", encoding="utf-8")
+        opencode_model_state.write_text(
+            json.dumps(
+                {
+                    "recent": [
+                        {"providerID": "Mify-Moon", "modelID": "moonshot/kimi-k2.6"},
+                        {"providerID": "Mify-Aili", "modelID": "tongyi/deepseek-v4-flash"},
+                        {"providerID": "Mify-Kimi", "modelID": "Pro/moonshotai/Kimi-K2.5"},
+                    ],
+                    "variant": {
+                        "Mify-Moon/moonshot/kimi-k2.6": "default",
+                        "Mify-Aili/tongyi/deepseek-v4-flash": "default",
+                        "Mify-Kimi/Pro/moonshotai/Kimi-K2.5": "thinking",
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
         env = os.environ.copy()
         env["CODEX_AUTH_PASSPHRASE"] = "test-passphrase"
@@ -191,6 +212,7 @@ def main() -> int:
 
         env["PATH"] = f"{bin_dir}:{env['PATH']}"
         env["OPENCODE_SECURE_MCP_STATE_DIR"] = str(state_dir)
+        env["OPENCODE_MODEL_STATE_PATH"] = str(opencode_model_state)
 
         proc, client = start_server_client(env)
 
@@ -205,6 +227,59 @@ def main() -> int:
                 "opencode_collect_artifacts",
             }
             assert expected.issubset(tool_names), tool_names
+
+            default_resp = client.request(
+                "tools/call",
+                {
+                    "name": "opencode_run_task",
+                    "arguments": {
+                        "instruction": "auto default",
+                        "encrypted_file": str(encrypted_file),
+                        "pass_file": str(pass_file),
+                    },
+                },
+            )
+            default_structured = default_resp["result"]["structuredContent"]
+            assert default_structured["ok"] is True
+            assert "ok model=Mify-Moon/moonshot/kimi-k2.6 message=auto default" in default_structured["stdout"]
+            assert default_structured["resolved_model"] == "Mify-Moon/moonshot/kimi-k2.6"
+            assert default_structured["resolution_source"] == "recent_default"
+
+            alias_resp = client.request(
+                "tools/call",
+                {
+                    "name": "opencode_run_task",
+                    "arguments": {
+                        "instruction": "builtin alias",
+                        "model": "kimi",
+                        "encrypted_file": str(encrypted_file),
+                        "pass_file": str(pass_file),
+                    },
+                },
+            )
+            alias_structured = alias_resp["result"]["structuredContent"]
+            assert alias_structured["ok"] is True
+            assert "ok model=Mify-Moon/moonshot/kimi-k2.6 message=builtin alias" in alias_structured["stdout"]
+            assert alias_structured["resolved_model"] == "Mify-Moon/moonshot/kimi-k2.6"
+            assert alias_structured["resolution_source"] == "alias_builtin"
+
+            short_resp = client.request(
+                "tools/call",
+                {
+                    "name": "opencode_run_task",
+                    "arguments": {
+                        "instruction": "providerless short",
+                        "model": "moonshot/kimi-k2.6",
+                        "encrypted_file": str(encrypted_file),
+                        "pass_file": str(pass_file),
+                    },
+                },
+            )
+            short_structured = short_resp["result"]["structuredContent"]
+            assert short_structured["ok"] is True
+            assert "ok model=Mify-Moon/moonshot/kimi-k2.6 message=providerless short" in short_structured["stdout"]
+            assert short_structured["resolved_model"] == "Mify-Moon/moonshot/kimi-k2.6"
+            assert short_structured["resolution_source"] == "recent_match"
 
             run_resp = client.request(
                 "tools/call",
@@ -221,6 +296,8 @@ def main() -> int:
             structured = run_resp["result"]["structuredContent"]
             assert structured["ok"] is True
             assert "hello from mcp" in structured["stdout"]
+            assert structured["resolved_model"] == "Mify-Kimi/Pro/moonshotai/Kimi-K2.5"
+            assert structured["resolution_source"] == "explicit"
 
             trace_resp = client.request(
                 "tools/call",
@@ -375,7 +452,10 @@ def main() -> int:
                     },
                 },
             )
-            job_id = submit_resp["result"]["structuredContent"]["job_id"]
+            submit_structured = submit_resp["result"]["structuredContent"]
+            job_id = submit_structured["job_id"]
+            assert submit_structured["resolved_model"] == "Mify-Kimi/Pro/moonshotai/Kimi-K2.5"
+            assert submit_structured["resolution_source"] == "explicit"
 
             cancel_resp = client.request(
                 "tools/call",
@@ -402,7 +482,10 @@ def main() -> int:
                     },
                 },
             )
-            restart_job_id = restart_resp["result"]["structuredContent"]["job_id"]
+            restart_structured = restart_resp["result"]["structuredContent"]
+            restart_job_id = restart_structured["job_id"]
+            assert restart_structured["resolved_model"] == "Mify-Kimi/Pro/moonshotai/Kimi-K2.5"
+            assert restart_structured["resolution_source"] == "explicit"
             time.sleep(0.5)
             proc.kill()
             proc.wait(timeout=10)
@@ -416,6 +499,8 @@ def main() -> int:
             restart_structured = restart_get["result"]["structuredContent"]
             assert restart_structured["job"]["status"] == "succeeded"
             assert restart_structured["job"]["exit_code"] == 0
+            assert restart_structured["job"]["resolved_model"] == "Mify-Kimi/Pro/moonshotai/Kimi-K2.5"
+            assert restart_structured["job"]["resolution_source"] == "explicit"
             assert "restart-end" in restart_structured["stdout_tail"]
         finally:
             assert proc.stdin is not None

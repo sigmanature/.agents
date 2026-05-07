@@ -36,6 +36,7 @@ The public contract should not expose:
 - task intent: `instruction`, `task_type`
 - location: `cwd`
 - execution policy: `model`, `timeout_sec`
+  - `model` may be omitted for recent-default resolution, passed as a built-in alias such as `kimi`, passed as a provider-less validated suffix such as `moonshot/kimi-k2.6`, or passed as an explicit full provider/model id
 - diagnostics policy: `diagnostics.mode`, tail-capture limits, artifact persistence, and opencode debug flags
 - secure launch parameters: `encrypted_file`, `pass_file`, `pass_env`, `env_keys`
 - tracing: `request_id`, `tags`
@@ -44,9 +45,11 @@ The public contract should not expose:
 
 - identity: `job_id`
 - lifecycle: `status`, `summary`
+- model resolution: `requested_model`, `resolved_model`, `resolution_source`
 - execution metadata: `cwd`, `command`, `artifact_paths`
 - result payload: `stdout`, `stderr`, `artifacts`
 - failure surface: `error.code`, `error.message`
+- resolver failure hints: `candidate_models`, `model_state_path`
 - failure diagnostics: `diagnostics.mode`, `stdout_tail`, `stderr_tail`, `artifact_paths`
 - timing: `submitted_at`, `started_at`, `finished_at`
 

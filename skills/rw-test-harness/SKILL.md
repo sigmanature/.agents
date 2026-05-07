@@ -71,6 +71,8 @@ When adding buffered-I/O coverage:
 - for the small two-phase GC case, keep GC triggering in `utils/f2fs_gc.py` and use direct `f2fs_io gc_urgent` instead of sysfs writes.
 - for post-write fs-verity pressure, treat candidate naming and runtime enablement as separate phases: `.V`-style names only mark stable candidates, while actual `enable_fsverity()` must be checked after each concurrent fsync batch for every batched path, not only the current focus path.
 - keep a provider-level regression around that rule in `case/test_artifact_pressure_verity_fsync_plan.py`; do not rely on long guest runs alone to catch batch-wide verity gating bugs.
+- when a buffered write stress case needs exact full-file content verification, partition chunk ownership across concurrent writers first; if `workers > slots`, reject exact-content verification and fall back to invariant-only checks instead of emitting a false corruption signal.
+- when mounted verification still reports a mismatch after disjoint ownership is in place, preserve the loop image and confirm the same bytes through a fresh read-only remount before concluding it is an on-disk corruption symptom.
 
 ### Inline Artifact Pressure Workflow Contract
 
