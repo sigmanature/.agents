@@ -40,11 +40,12 @@ If the bridge is incomplete, keep the row at `开放` and write the exact missin
 
 ### Main Workflow
 1. Name the bug and pin the concrete failing sample, inode, address, folio, page index, or artifact label.
-2. Initialize the hypothesis matrix with only the hypotheses that already have a real trigger.
-3. For each hypothesis, write the shortest executable call chain from current evidence to the relevant code.
-4. Assign a status using the decision table below.
-5. On every new log or code read, update only the affected rows and record why the status changed.
-6. Keep a short “next candidate slots” section for not-yet-initialized hypotheses.
+2. Record a compact path card or equivalent round label so resume/compression can reload the current discriminator quickly.
+3. Initialize the hypothesis matrix with only the hypotheses that already have a real trigger.
+4. For each hypothesis, write the shortest executable call chain from current evidence to the relevant code.
+5. Assign a status using the decision table below.
+6. On every new log or code read, update only the affected rows and record why the status changed.
+7. Keep a short “next candidate slots” section for not-yet-initialized hypotheses.
 
 ### Decision Table
 | Status | Required condition | Required evidence | Forbidden shortcut |
@@ -56,10 +57,23 @@ If the bridge is incomplete, keep the row at `开放` and write the exact missin
 ### Output Contract
 - bug:
 - sample:
+- path card:
 - rows changed:
 - new status:
 - reason with file:line chain:
 - next missing edge:
+
+## Reopen Rule
+
+Do not reopen a row already marked `排除` unless the new round contains explicit new evidence that invalidates the old exclusion.
+
+Required format when reopening:
+
+1. cite the old exclusion reason,
+2. cite the new contradictory evidence,
+3. name the exact missing bridge that is open again.
+
+Do not reopen a row only because the current session forgot the earlier analysis.
 
 ## Matrix Format
 

@@ -86,6 +86,7 @@ The interface is intentionally task-shaped, not a raw `opencode` CLI passthrough
 
 - MCP calls no longer rely on a static default provider/model pairing.
 - Empty `model` or `auto/default/stable` resolves to the most recent validated local success from `~/.local/state/opencode/model.json`.
+- `search` resolves server-side to `Mify-Mini/azure_openai/gpt-5-mini`.
 - Built-in short aliases such as `kimi`, `deepseek`, `qwen`, `glm`, `gpt`, `claude`, and `minimax` resolve server-side against validated local entries.
 - Provider-less validated suffixes such as `moonshot/kimi-k2.6` or `deepseek-v4-flash` also resolve server-side when they match local `recent`/`variant` entries.
 - Explicit full provider/model ids still pass through unchanged for custom pinning.

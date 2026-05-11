@@ -60,6 +60,7 @@ Follow this decision flow.
    - Explain how to query the resulting log with [references/log-table-workflow.md](references/log-table-workflow.md) and `scripts/kernel_log_kv_query.py`.
    - When using `pr_debug()`/dynamic_debug, provide a reproducible enable/disable recipe; for f2fs table-mode examples see `scripts/enable_f2fs_inode_kv_logs.sh`.
    - If the user explicitly wants “大胆打日志” (always-on visibility), prefer `pr_emerg` but **still keep an inode/range filter**; see [references/f2fs-writeback-kv-logs.md](references/f2fs-writeback-kv-logs.md).
+   - When the local workspace has packet helpers, prefer emitting a bounded packet such as `log-chain-packet.json` instead of returning a large raw grep dump.
 
 ## Output format
 Unless the user asks otherwise, respond in this structure:
@@ -82,6 +83,7 @@ Unless the user asks otherwise, respond in this structure:
 ### 5) How to read the logs
 - Apply "healthy vs suspicious" rules (especially concurrency)
 - When relevant, show one or two concrete query commands that treat the log as a table
+- If the query is long-running or likely to be revisited after resume, show how to turn the result into a stable packet file rather than prose-only notes
 
 ## Non-negotiable rules
 - **Temporary branch in a disposable worktree:** never suggest landing logs directly on main or repeatedly checking branches in the user's main checkout unless they explicitly ask for that.
@@ -93,6 +95,8 @@ Unless the user asks otherwise, respond in this structure:
 - **Stable prefix:** every line starts with a short tag so it can be grepped.
 - **Runtime control:** when using `pr_debug()`, provide exact dynamic_debug commands or a helper script path to enable the selected callsites before testing and disable them afterward.
 - **Table-friendly rows for multi-thread debug:** if the user is tracking a shared object across threads, ensure each relevant log line contains the same queryable ids and avoids prose-only fields.
+- **Do not default to broad raw grep:** if stable ids or prefixes exist, query them first and only widen the search when the packet/report names a missing edge.
+- **Prefer packetized outputs for agent handoff:** when the query result will be consumed by another agent or after context compression, prefer a bounded artifact such as `/home/nzzhao/learn_os/scripts/kernel_log_chain_packet.py`.
 
 ## References
 - [references/worktree-kernel-build.md](references/worktree-kernel-build.md)
@@ -117,7 +121,8 @@ Unless the user asks otherwise, respond in this structure:
 2. Instrument the outer site first so the next repro distinguishes branch-local reasons instead of only restating the final errno.
 3. Instrument the immediate upstream state setter that can force that branch, such as `CP_ERROR_FLAG` or `mapping_set_error(-EIO)`.
 4. Build and run one repro with only those linked layers instrumented.
-5. Update the bug matrix with the new causal chain before widening the log surface.
+5. Query the result with the narrowest stable ids first, and when possible write a bounded packet artifact instead of replaying the whole raw dump.
+6. Update the bug matrix with the new causal chain before widening the log surface.
 
 ### Decision Table
 | Phase | Trigger / Symptom | Action | Verify | On Failure | Workflow Effect |
@@ -130,5 +135,6 @@ Unless the user asks otherwise, respond in this structure:
 - branch selector sites added:
 - upstream setter sites added:
 - build verification:
+- query artifact:
 - repro evidence chain:
 - next widening step:

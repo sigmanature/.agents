@@ -99,8 +99,22 @@ if [[ -z "$OUTROOT" ]]; then
   OUTROOT="$REPO_DIR/output"
 fi
 
+THP_SIZE=""
+if command -v adb >/dev/null 2>&1; then
+  for sz in 16 32 64; do
+    mode=$(adb -s "$SERIAL" shell "cat /sys/kernel/mm/transparent_hugepage/hugepages-${sz}kB/enabled" 2>/dev/null | tr -d '\r')
+    if [[ "$mode" == *"[always]"* ]]; then
+      THP_SIZE="${sz}k"
+      break
+    fi
+  done
+fi
+if [[ -z "$THP_SIZE" ]]; then
+  THP_SIZE="auto"
+fi
+
 TS="$(date +%Y%m%d_%H%M%S)"
-OUTDIR="$OUTROOT/memstress_${TS}_${SERIAL}"
+OUTDIR="$OUTROOT/memstress_${TS}_${SERIAL}_${THP_SIZE}"
 mkdir -p "$OUTDIR"
 
 PY="/home/nzzhao/.agents/skills/android-thp-fallback-sampler/scripts/run_memstress_and_collect_logs.py"

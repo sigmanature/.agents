@@ -6,15 +6,25 @@
   1) 统一以 ~/.agents/AGENTS.md 作为“单一来源”，然后安装/适配到：
      - Roo（project）：<workspace>/AGENTS.md
      - Codex（project）：<workspace>/AGENTS.md
+     - OpenCode（project）：<workspace>/AGENTS.md
      - Codex（user）：~/.codex/AGENTS.md
+     - OpenCode（user）：~/.config/opencode/AGENTS.md
      - Claude（project）：<workspace>/CLAUDE.md  (内容为 @AGENTS.md + 可追加说明)
      - Claude（user）：~/.claude/CLAUDE.md      (内容为 @~/.agents/AGENTS.md)
      - Roo（user）：~/.roo/rules/00-AGENTS.md   (作为全局 rules 文件注入)
 
-  2) project 范围：递归扫描当前目录树，找到 .roo/.claude/.codex 这些“厂商目录”，
-     以它们的父目录作为 workspace root，在该 root 写入/链接 AGENTS.md 与 CLAUDE.md。
-  3) user 范围：对 ~/.roo ~/.claude ~/.codex 进行安装（如目录存在则安装）。
+  2) project 范围：递归扫描当前目录树，找到 .roo/.claude/.codex/.opencode 这些“厂商目录”，
+     或找到 opencode.json/opencode.jsonc 这些 OpenCode 项目配置文件，
+     以它们的父目录/所在目录作为 workspace root，在该 root 写入/链接 AGENTS.md 与 CLAUDE.md。
+  3) user 范围：对 ~/.roo ~/.claude ~/.codex ~/.config/opencode 进行安装（如目录存在则安装；--force 可创建）。
   4) 支持卸载：仅删除“由本脚本管理”的文件/软链（尽量避免误删你手写的文件）。
+
+OpenCode 适配说明：
+  - 官方规则文件：
+      project: <workspace>/AGENTS.md
+      global : ~/.config/opencode/AGENTS.md
+  - ~/.agents/AGENTS.md 不是 OpenCode 官方默认读取路径；本脚本通过软链把它接到官方路径。
+  - .opencode/agents/ 与 ~/.config/opencode/agents/ 是自定义 agent 定义目录，不是 AGENTS.md 规则文件。
 
 用法：
   # project（非交互）
@@ -37,18 +47,26 @@ import shutil
 import sys
 from pathlib import Path
 
-# 你要“先适配”的三个厂商目录（project 扫描时用）
+# 你要“先适配”的厂商目录（project 扫描时用）
 PROJECT_VENDOR_DIRS = [
-    ".roo",     # Roo Code（project-local）
-    ".claude",  # Claude Code（project scope）
-    ".codex",   # Codex CLI（project override）
+    ".roo",       # Roo Code（project-local）
+    ".claude",    # Claude Code（project scope）
+    ".codex",     # Codex CLI（project override）
+    ".opencode",  # OpenCode（project-local config/agents/plugins）
 ]
 
-# user scope 下会用到的厂商根目录（存在才安装）
+# 也用这些项目配置文件辅助定位 workspace root
+PROJECT_VENDOR_FILES = [
+    "opencode.json",
+    "opencode.jsonc",
+]
+
+# user scope 下会用到的厂商根目录（存在才安装；--force 可创建）
 USER_VENDOR_DIRS = [
     ".roo",
     ".claude",
     ".codex",
+    ".config/opencode",
 ]
 
 PRUNE_DIRS = {
@@ -170,15 +188,23 @@ def canonicalize_source(src: Path, canonical: Path, force: bool) -> Path:
     return canonical
 
 
-def find_project_workspaces(root: Path, vendor_names: set[str], max_depth: int) -> dict[Path, set[str]]:
+def find_project_workspaces(
+    root: Path,
+    vendor_names: set[str],
+    max_depth: int,
+    vendor_files: set[str] | None = None,
+) -> dict[Path, set[str]]:
     """
-    扫描当前目录树，发现 .roo/.claude/.codex 目录后，
-    以其父目录作为 workspace root，聚合这个 workspace 命中的 vendor。
+    扫描当前目录树：
+    - 发现 .roo/.claude/.codex/.opencode 目录后，以其父目录作为 workspace root；
+    - 发现 opencode.json/opencode.jsonc 后，以该文件所在目录作为 workspace root；
+    - 聚合这个 workspace 命中的 vendor/config 标记。
     """
     root = root.resolve()
+    vendor_files = vendor_files or set()
     workspaces: dict[Path, set[str]] = {}
 
-    for dirpath, dirnames, _ in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
         p = Path(dirpath)
 
         # 深度限制
@@ -199,6 +225,11 @@ def find_project_workspaces(root: Path, vendor_names: set[str], max_depth: int) 
                 ws = vd.parent.resolve()
                 workspaces.setdefault(ws, set()).add(d)
 
+        for f in filenames:
+            if f in vendor_files:
+                ws = p.resolve()
+                workspaces.setdefault(ws, set()).add(f)
+
     return dict(sorted(workspaces.items(), key=lambda kv: str(kv[0])))
 
 
@@ -215,6 +246,7 @@ def uninstall_project(ws: Path, canonical_agents: Path) -> list[str]:
     logs: list[str] = []
 
     # 1) AGENTS.md（只删指向 canonical 的软链）
+    #    Roo / Codex / OpenCode project rules 都复用这个 AGENTS.md。
     agents_link = ws / "AGENTS.md"
     if is_symlink_to(agents_link, canonical_agents):
         safe_unlink(agents_link)
@@ -262,6 +294,14 @@ def uninstall_user(canonical_agents: Path) -> list[str]:
     else:
         logs.append("- keep ~/.codex/AGENTS.md (not our symlink / missing)")
 
+    # OpenCode: ~/.config/opencode/AGENTS.md
+    opencode_agents = Path.home() / ".config" / "opencode" / "AGENTS.md"
+    if is_symlink_to(opencode_agents, canonical_agents):
+        safe_unlink(opencode_agents)
+        logs.append("- removed ~/.config/opencode/AGENTS.md symlink")
+    else:
+        logs.append("- keep ~/.config/opencode/AGENTS.md (not our symlink / missing)")
+
     # Roo: ~/.roo/rules/00-AGENTS.md
     roo_agents = Path.home() / ".roo" / "rules" / "00-AGENTS.md"
     if is_symlink_to(roo_agents, canonical_agents):
@@ -292,6 +332,7 @@ def install_project(ws: Path, canonical_agents: Path, force: bool) -> list[str]:
     logs: list[str] = []
 
     # 1) 统一：<workspace>/AGENTS.md 软链到 canonical
+    #    Roo / Codex / OpenCode project rules 都使用这个文件。
     status_agents = ensure_symlink(ws / "AGENTS.md", canonical_agents, force=force)
     logs.append(f"- {ws}/AGENTS.md: {status_agents}")
 
@@ -324,6 +365,17 @@ def install_user(canonical_agents: Path, force: bool) -> list[str]:
         logs.append(f"- ~/.codex/AGENTS.md: {status}")
     else:
         logs.append("- ~/.codex not found, skip")
+
+    # OpenCode: ~/.config/opencode/AGENTS.md
+    # 注意：~/.agents/AGENTS.md 不是 OpenCode 官方默认读取路径；
+    # 本脚本通过软链把“单一来源”接到 OpenCode 的官方 global rules 路径。
+    opencode_home = Path.home() / ".config" / "opencode"
+    if opencode_home.exists() or force:
+        opencode_home.mkdir(parents=True, exist_ok=True)
+        status = ensure_symlink(opencode_home / "AGENTS.md", canonical_agents, force=force)
+        logs.append(f"- ~/.config/opencode/AGENTS.md: {status}")
+    else:
+        logs.append("- ~/.config/opencode not found, skip")
 
     # Roo: ~/.roo/rules/00-AGENTS.md（全局 rules 注入）
     roo_home = Path.home() / ".roo"
@@ -360,7 +412,7 @@ def main() -> int:
     g.add_argument("-p", "--project", action="store_true", help="project 范围（扫描当前目录树）")
     g.add_argument("-u", "--user", action="store_true", help="user 范围（安装到家目录厂商配置）")
     parser.add_argument("--scope", choices=["project", "user"], help="兼容参数：project 或 user（可不用）")
-    parser.add_argument("--force", action="store_true", help="覆盖已存在目标/链接")
+    parser.add_argument("--force", action="store_true", help="覆盖已存在目标/链接；user scope 下也会创建缺失的厂商目录")
     parser.add_argument("--max-depth", type=int, default=6, help="project 级递归搜索最大深度(默认 6)")
     parser.add_argument("--uninstall", action="store_true", help="卸载（尽量只删除脚本托管的文件/软链）")
     args = parser.parse_args()
@@ -401,9 +453,14 @@ def main() -> int:
             return 0
 
         print("[UNINSTALL] project scope")
-        workspaces = find_project_workspaces(Path.cwd(), set(PROJECT_VENDOR_DIRS), max_depth=args.max_depth)
+        workspaces = find_project_workspaces(
+            Path.cwd(),
+            set(PROJECT_VENDOR_DIRS),
+            max_depth=args.max_depth,
+            vendor_files=set(PROJECT_VENDOR_FILES),
+        )
         if not workspaces:
-            print("[WARN] 未在当前目录树中找到任何 .roo/.claude/.codex，无法定位 workspace")
+            print("[WARN] 未在当前目录树中找到任何 .roo/.claude/.codex/.opencode 或 opencode.json/opencode.jsonc，无法定位 workspace")
             return 0
 
         for ws in workspaces.keys():
@@ -419,10 +476,16 @@ def main() -> int:
         return 0
 
     print("[INSTALL] project scope")
-    workspaces = find_project_workspaces(Path.cwd(), set(PROJECT_VENDOR_DIRS), max_depth=args.max_depth)
+    workspaces = find_project_workspaces(
+        Path.cwd(),
+        set(PROJECT_VENDOR_DIRS),
+        max_depth=args.max_depth,
+        vendor_files=set(PROJECT_VENDOR_FILES),
+    )
     if not workspaces:
-        print("[WARN] 未在当前目录树中找到任何 .roo/.claude/.codex，无法定位 workspace")
-        print("       你可以先在项目根目录创建对应目录（例如 .claude/ 或 .roo/ 或 .codex/）再运行。")
+        print("[WARN] 未在当前目录树中找到任何 .roo/.claude/.codex/.opencode 或 opencode.json/opencode.jsonc，无法定位 workspace")
+        print("       你可以先在项目根目录创建对应目录（例如 .opencode/ 或 .claude/ 或 .roo/ 或 .codex/），")
+        print("       或创建 opencode.json/opencode.jsonc 后再运行。")
         return 1
 
     for ws, vendors in workspaces.items():

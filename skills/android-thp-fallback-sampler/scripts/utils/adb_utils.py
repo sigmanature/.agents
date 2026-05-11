@@ -301,7 +301,8 @@ def start_logcat_stream(
         base + ["logcat", "-v", "threadtime", "-b", "all"],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
     )
 

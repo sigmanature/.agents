@@ -36,6 +36,7 @@ SYNC_POLL_INTERVAL_SEC = 0.2
 SYNC_HANDOFF_MIN_TIMEOUT_SEC = 300
 DEFAULT_OPENCODE_MODEL_STATE_PATH = "~/.local/state/opencode/model.json"
 AUTO_MODEL_TOKENS = {"", "auto", "default", "stable", "recent"}
+SEARCH_MODEL = "Mify-Mini/azure_openai/gpt-5-mini"
 BUILTIN_MODEL_ALIASES = {
     "kimi": ("kimi",),
     "deepseek": ("deepseek",),
@@ -249,6 +250,13 @@ def resolve_model_argument(raw_model: Any) -> dict[str, str | None]:
 
     normalized = normalize_model_token(requested_model)
     candidates = validated_model_candidates()
+
+    if normalized == "search":
+        return {
+            "requested_model": requested_model,
+            "resolved_model": SEARCH_MODEL,
+            "resolution_source": "search_alias",
+        }
 
     if normalized in AUTO_MODEL_TOKENS:
         if not candidates:

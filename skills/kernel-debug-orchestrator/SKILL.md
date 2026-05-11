@@ -38,9 +38,11 @@ Do not skip the first two dependencies for this skill.
 ### Main Workflow
 1. Normalize context and identify the source tree, `O=` build tree, target subsystem, and reproducer.
 2. Verify runtime prerequisites that gate the target path before spending time on workload debugging.
-3. Apply or refine instrumentation, then build the changed kernel.
-4. Run the reproducer and capture bounded evidence.
-5. Correlate evidence and choose the smallest next iteration.
+3. Decide whether this round is sample-first, static-first, or log-first, and record that choice in the iteration output.
+4. Apply or refine instrumentation, then build the changed kernel.
+5. Run the reproducer and capture bounded evidence.
+6. Convert long-running status and notable transitions into compact event-layer artifacts before broad analysis.
+7. Correlate evidence and choose the smallest next iteration.
 
 ### Decision Table
 | Phase | Trigger / Symptom | Action | Verify | On Failure | Workflow Effect |
@@ -49,8 +51,10 @@ Do not skip the first two dependencies for this skill.
 
 ### Output Contract
 - phase reached:
+- evidence mode:
 - decision path taken:
 - verification evidence:
+- checkpoint path:
 - fallback used:
 - unresolved blocker:
 - next workflow step:
@@ -114,6 +118,7 @@ For long tests via QGA:
 - redirect output to guest file,
 - tail/log-scan separately,
 - never equate QGA timeout with test failure until process/log state is checked.
+- if the run is long enough to survive context compression or handoff, write a compact checkpoint before expanding analysis.
 
 ### Step 6: Collect and correlate evidence
 
@@ -131,6 +136,11 @@ Correlation requirement:
 - when logs are table-friendly, query them as structured rows before doing free-form reading:
   - generic: `python3 /home/nzzhao/.agents/skills/kernel-log-instrumentor/scripts/kernel_log_kv_query.py <log> ...`
   - existing F2FS WBDBG/sysrq logs: `bash /home/nzzhao/.agents/skills/kernel-log-instrumentor/scripts/f2fs_log_field_query.sh <log> ...`
+- when the local workspace has the phase-1 event-layer helpers, prefer:
+  - `python3 /home/nzzhao/learn_os/scripts/kernel_log_chain_packet.py ...`
+  - `python3 /home/nzzhao/learn_os/scripts/kernel_debug_emit_job_event.py ...`
+  - `python3 /home/nzzhao/learn_os/scripts/kernel_debug_write_checkpoint.py ...`
+- if a background job already emits `heartbeat.json`, `event.json`, or `checkpoint.md`, consume those first and only escalate to raw streams when the packet/checkpoint reports a missing edge.
 - when `sysrq` dumps are present, run pid/ino correlation script:
   - `/home/nzzhao/learn_os/scripts/f2fs_pid_ino_correlate.sh <kernel_stream.txt> 3 40`
   - use output to align blocked `pid` with nearby `[WBDBG] pid/ino` activity.
@@ -158,9 +168,11 @@ Use this structure every loop:
 
 - `iteration`: integer
 - `goal`: what this round tries to prove/disprove
+- `evidence mode`: `sample-first` / `static-first` / `log-first`
 - `instrumentation`: files/functions and why
 - `build`: command + status + log path
 - `repro`: command + status + log path
+- `event artifacts`: heartbeat/event/checkpoint/log-chain-packet paths when they exist
 - `findings`: concrete evidence and inference
 - `next action`: smallest high-value next step
 
@@ -202,3 +214,6 @@ If blocked, report exact blocker and minimal unblock command.
 7. Pixel slider build entrypoint is cwd-sensitive.
    - `private/google-modules/soc/gs/build_slider.sh` must be launched from the `pixel/` repo root.
    - A failure at `tools/bazel: No such file or directory` is an invocation-path issue, not a kernel build failure.
+8. Existing query/preserve tooling must survive resume and compression.
+   - If the current round already has stream capture, inode watchers, field-query helpers, or event-layer artifacts, record them in the checkpoint and reload that checkpoint before widening the search.
+   - Do not fall back to broad raw-log search merely because the session forgot which helper was already active.

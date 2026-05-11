@@ -306,6 +306,18 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _auto_detect_stats_dir(serial: str, use_su: bool) -> str:
+    sizes = ["16", "32", "64"]
+    prefix = "su -c " if use_su else ""
+    for size in sizes:
+        path = f"/sys/kernel/mm/transparent_hugepage/hugepages-{size}kB/enabled"
+        cp = adb_shell_cp(serial, f"{prefix}cat {path}", timeout_s=10, check=False)
+        mode = (cp.stdout or "").strip()
+        if "[always]" in mode:
+            return f"/sys/kernel/mm/transparent_hugepage/hugepages-{size}kB/stats"
+    return "/sys/kernel/mm/transparent_hugepage/hugepages-16kB/stats"
+
+
 def run_one_device(
     *,
     serial: str,
@@ -321,6 +333,13 @@ def run_one_device(
     round_s = max(0, int(args.round_s))
     counters = [x.strip() for x in str(args.counters).split(",") if x.strip()]
     setup_cmds = CONFIG["setup_shell"] if args.setup_shell is None else list(args.setup_shell)
+
+    stats_dir = str(args.stats_dir)
+    if stats_dir == DEFAULT_STATS_DIR:
+        detected = _auto_detect_stats_dir(serial, bool(args.use_su))
+        if detected != stats_dir:
+            stats_dir = detected
+            print(f"[{serial}] Auto-detected stats_dir: {stats_dir}")
 
     all_pkgs: List[str] = []
     if args.package:
@@ -347,7 +366,7 @@ def run_one_device(
         "config": {
             "duration_s": duration_s,
             "interval_s": int(args.interval_s),
-            "stats_dir": args.stats_dir,
+            "stats_dir": stats_dir,
             "counters": counters,
             "use_su": bool(args.use_su),
             "setup_shell": setup_cmds,
@@ -404,7 +423,7 @@ def run_one_device(
         if not args.no_thp_ensure:
             thp_result = ensure_thp_mode_for_stats(
                 serial,
-                stats_dir=args.stats_dir,
+                    stats_dir=stats_dir,
                 use_su=bool(args.use_su),
                 desired_mode=args.thp_ensure_mode,
                 retries=int(args.thp_ensure_retries),
@@ -471,7 +490,7 @@ def run_one_device(
             try:
                 n, nerr = sample_loop(
                     serial=serial,
-                    stats_dir=args.stats_dir,
+                stats_dir=stats_dir,
                     counters=counters,
                     use_su=bool(args.use_su),
                     interval_s=max(1, int(args.interval_s)),

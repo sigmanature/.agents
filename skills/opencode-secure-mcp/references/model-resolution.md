@@ -6,14 +6,17 @@ Avoid spending agent context on provider/model discovery before every `opencode`
 
 ## Resolution Order
 
-1. Empty `model`, `auto`, `default`, `stable`, or `recent`
+1. `search`
+   - Resolve to `Mify-Mini/azure_openai/gpt-5-mini`.
+   - Report `resolution_source=search_alias`.
+2. Empty `model`, `auto`, `default`, `stable`, or `recent`
    - Resolve to the first entry in `~/.local/state/opencode/model.json` `recent`.
    - Report `resolution_source=recent_default`.
-2. Built-in short aliases
+3. Built-in short aliases
    - Supported aliases currently include `kimi`, `deepseek`, `qwen`, `glm`, `gpt`, `claude`, and `minimax`.
    - Match aliases against validated local `recent` then `variant` entries.
    - Report `resolution_source=alias_builtin`.
-3. Provider-less validated suffixes
+4. Provider-less validated suffixes
    - Examples: `moonshot/kimi-k2.6`, `deepseek-v4-flash`.
    - Match against validated local `recent` then `variant` entries.
    - Report `resolution_source=recent_match`.
