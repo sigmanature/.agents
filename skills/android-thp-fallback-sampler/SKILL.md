@@ -143,9 +143,15 @@ python3 scripts/run_memstress_and_collect_logs.py \
 - `--package <pkg>` / `--package-file <file>`：memstress 的目标 app 集合
 - `--heavy-package <pkg>` / `--heavy-package-file <file>`：显式标记重型 app，优先在每轮启动
 - `--burst-size <n>` / `--heavy-per-burst <n>`：每轮启动数量与 heavy 目标数
+- `--selection-mode epoch`：默认使用 epoch 无放回选包；每个 epoch 内不会重复启动同一 app
+- `--epoch-reshuffle/--no-epoch-reshuffle`：是否在 epoch 边界重新打散顺序；默认会重新打散
 - `--hold-ms <ms>`：每次成功启动后 hold（用于“闪进一会再回桌面”的节奏控制；默认 200ms）
 - `--launch-gap-ms <ms>` / `--cycle-sleep-ms <ms>`：启动间隔与轮间隔
 - `--prefer-keywords <csv>`：关键词自动偏置（camera/video/...）
+- `--victim-package <pkg>`：把某个 app 作为 victim 单独 prime/revisit；它可以通过参数从 churn 集合中排除
+- `--victim-exclude-from-churn/--no-victim-exclude-from-churn`：默认把 victim 从 churn 集合排除
+- `--victim-prime-hold-ms <ms>`：victim 初次 prime 的前台停留时间
+- `--victim-revisit-every-cycles <n>` / `--victim-revisit-hold-ms <ms>`：每 N 个 churn cycle 通过正常 launcher 路径回访 victim 一次
 - `--oat-prune-watch`：运行期间轮询目标包并删除重新生成的 `oat/odex/vdex/art`
 - `--oat-prune-package <pkg>` / `--oat-prune-package-file <file>`：覆盖默认 watcher 包集；默认用当前 memstress 已安装目标包
 - `--oat-prune-poll-s <sec>`：watcher 轮询周期；建议从 `2s` 起步
@@ -198,6 +204,9 @@ python3 scripts/run_memstress_and_collect_logs.py \
 - monkey runner 现在默认带 `--ignore-native-crashes`，避免某个 app 的 native crash 直接把整轮 workload 打断；只有显式传 `--abort-on-native-crash` 时才恢复 crash-stop 行为。
 - memstress 只会在你显式传入的 package 集合内循环，不会像 `monkey --global` 那样全域乱跑；如果想强行偏向相机/视频，优先传明确的 `--memstress-heavy-package`，不要只依赖关键词猜测。
 - memstress 当前策略已精简为：`am start`（不带 `-W`）+ hold + HOME，不做 `force-stop`/LRU；详见 `references/memstress_strategy.md`。
+- memstress 现在默认使用“epoch 无放回”轮转：一个 epoch 内每个 app 最多被启动一次，epoch 结束后再重新打散顺序。这比小样本随机抽取更适合做 page-cache 挤压。
+- 如果要做 victim/refault 压力，可只靠参数完成：传 `--victim-package`，并保持 `--victim-exclude-from-churn` 为默认开启；脚本会先 prime victim，再在每 `--victim-revisit-every-cycles` 个 churn cycle 后回访一次 victim。
+- 如果要快速验证“这个负载形态到底有没有开始打出 refault 候选”，优先用 `scripts/run_refault_probe.py`。它会把 `memstress + trace_pipe + 20s drop_caches sidecar + probe_summary.json/md` 串起来，默认 churn `hold_ms=30ms`，并持续输出后台汇总，而不是让你先翻原始 trace。
 - memstress 的 classloading crash 监测现在只会对**目标 workload 包**生效；无关系统包的 `am_crash + ClassNotFoundException` 不会再把整轮实验误停。对应回归测试见 `tests/test_crash_signature.py`。
 - 如果后台 `dex2oat/artd` 会持续把目标包的编译产物补回来，可以开启 `--oat-prune-watch`；watcher 同时覆盖包目录下的 `oat/` 和 `/data/dalvik-cache`，但会明确跳过 `*.tmp`，避免碰发布中的临时文件。对应脚本见 `scripts/watch_oat_prune.py` 和 `tests/test_oat_watch.py`。
 - `watch_live_plot.py` 默认会在 `--out-dir` 下寻找 `<serial>/raw_samples.csv`，更适合 fleet/多设备目录；如果是单设备 direct-out-dir（`raw_samples.csv` 直接落在运行目录根），可把“运行目录的父目录”传给 `--out-dir`，把“运行目录 basename”当作 `--serial`，或者直接手工跑一次 `derive_metrics.py` 做即时对比。
@@ -208,6 +217,8 @@ python3 scripts/run_memstress_and_collect_logs.py \
 
 - `scripts/run_monkey.py`：跑采样 + monkey（logcat + monkey stdout/stderr + dumpsys）
 - `scripts/run_memstress_and_collect_logs.py`：跑采样 + memstress（logcat + cycle log + dumpsys）
+- `scripts/run_refault_probe.py`：短跑 refault probe 编排器，串联 `memstress + trace_pipe + 20s drop_caches sidecar + 后台 summary`
+- `scripts/summarize_refault_probe.py`：读取 probe 输出目录，汇总 victim revisit / repeated `(mm,tgid,ino,pgoff)` / contention analyzer 摘要
 - `scripts/launch_memstress_detached.sh`：可靠后台启动 memstress（setsid + pidfile + stdout/stderr）
 - `scripts/launch_memstress_uc_douyin_huoshan_detached.sh`：三 app 循环一键后台启动（UC + 抖音 + 火山）
 - `scripts/watch_oat_prune.py`：独立 sidecar watcher，轮询目标包并删除 regenerated `oat/odex/vdex/art`（跳过 `*.tmp`）

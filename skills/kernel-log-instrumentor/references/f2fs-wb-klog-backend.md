@@ -1,13 +1,17 @@
----
-name: f2fs-klog-wb
-description: "Enable and operate the custom F2FS writeback klog system (F2FS_WB_KLOG) found in vendor-modified kernel trees. Covers the 7 sysfs nodes, detail levels, filtering by inode/suffix/index, correlation via klog_wb_seq, and how to read dmesg output. Use when asked to enable F2FS writeback tracing on a Pixel/vendor kernel, to add F2FS_WB_KLOG call sites, to correlate userspace syscalls with writeback folios, or to use the klog_wb_* sysfs interface."
----
-
 # F2FS Writeback Klog (Custom Vendor Klog)
+
+## Role
+
+This is a backend reference for `kernel-log-instrumentor`, not a separate skill.
+
+Default reading order:
+
+1. decide in `kernel-log-instrumentor` whether the case is `klog-first`
+2. if the chosen method is F2FS vendor klog, use this document for the backend details
 
 ## Scope
 
-This skill covers the **custom F2FS writeback klog system** (a vendor patch, NOT upstream F2FS) that allows targeted, filterable dmesg logging of writeback and read/write folio operations. It uses a `KERN_EMERG` printk path to bypass normal loglevel gating, and is controlled entirely via sysfs at runtime -- no kernel recompilation needed.
+This reference covers the **custom F2FS writeback klog system** (a vendor patch, NOT upstream F2FS) that allows targeted, filterable dmesg logging of writeback and read/write folio operations. It uses a `KERN_EMERG` printk path to bypass normal loglevel gating, and is controlled entirely via sysfs at runtime -- no kernel recompilation needed.
 
 Code lives in vendor kernel trees such as:
 - `$PIXEL/common/fs/f2fs/` (Pixel common kernel)

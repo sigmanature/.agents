@@ -22,6 +22,8 @@ DEFAULT_COUNTERS = [
     "zswpout",
 ]
 
+FOLIO_ALLOC_KEYS = [f"order_{i}" for i in range(16)] + ["folio_large_total", "folio_alloc_total"]
+
 
 @dataclass
 class Sample:
@@ -52,6 +54,7 @@ def read_counters_once(serial: str, stats_dir: str, counters: Sequence[str], *, 
     for c in counters:
         parts.append(f"v=$(cat {stats_dir}/{c} 2>/dev/null || echo '')")
         parts.append(f"echo {c}=$v")
+    parts.append("cat /sys/kernel/mm/readahead/folio_alloc 2>/dev/null || true")
 
     script = "; ".join(parts)
 
@@ -63,9 +66,31 @@ def read_counters_once(serial: str, stats_dir: str, counters: Sequence[str], *, 
         for c in counters:
             s = kv.get(c, "")
             values[c] = int(s) if s.isdigit() else None
+
+        # Parse folio_alloc order_N counters
+        for key in FOLIO_ALLOC_KEYS[:-2]:
+            s = kv.get(key, "")
+            values[key] = int(s) if s.isdigit() else None
+
+        # Compute large folio totals
+        large_total = 0
+        total = 0
+        for i in range(16):
+            key = f"order_{i}"
+            val = values.get(key)
+            if val is not None:
+                total += val
+                if i > 0:
+                    large_total += val
+        values["folio_large_total"] = large_total
+        values["folio_alloc_total"] = total
+
         return Sample(host_ts=host_ts, device_ts=dev_ts, values=values, error="")
     except Exception as e:
-        return Sample(host_ts=host_ts, device_ts=None, values={str(c): None for c in counters}, error=str(e))
+        err_values: Dict[str, Optional[int]] = {str(c): None for c in counters}
+        for key in FOLIO_ALLOC_KEYS:
+            err_values[key] = None
+        return Sample(host_ts=host_ts, device_ts=None, values=err_values, error=str(e))
 
 
 def sample_loop(
@@ -75,7 +100,6 @@ def sample_loop(
     counters: Sequence[str],
     use_su: bool,
     interval_s: int,
-    duration_s: int,
     out_csv: Path,
     retries: int,
     retry_sleep_s: int,
@@ -83,13 +107,12 @@ def sample_loop(
 ) -> Tuple[int, int]:
     """Returns (num_samples, num_errors).
 
+    Runs indefinitely until stop_event is set. Sampling interval is fixed.
     stop_event: optional `threading.Event`-like object with `.is_set()`.
     """
 
-    fieldnames = ["host_ts", "device_ts", "error"] + list(counters)
-    t0 = time.time()
-    t_end = t0 + max(1, duration_s)
-    next_t = t0
+    fieldnames = ["host_ts", "device_ts", "error"] + list(counters) + FOLIO_ALLOC_KEYS
+    next_t = time.time()
 
     num = 0
     num_err = 0
@@ -104,9 +127,6 @@ def sample_loop(
                 break
 
             now = time.time()
-            if now >= t_end:
-                break
-
             if now < next_t:
                 time.sleep(min(next_t - now, 1.0))
                 continue
@@ -124,7 +144,7 @@ def sample_loop(
                 "device_ts": s.device_ts if s.device_ts is not None else "",
                 "error": s.error,
             }
-            for c in counters:
+            for c in counters + FOLIO_ALLOC_KEYS:
                 v = s.values.get(str(c))
                 row[str(c)] = v if v is not None else ""
             w.writerow(row)

@@ -9,7 +9,8 @@
   "vendors": [
     "codex",
     "claude",
-    "roo"
+    "roo",
+    "opencode"
   ],
   "roo": {
     "disabled": false

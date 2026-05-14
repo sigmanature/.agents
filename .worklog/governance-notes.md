@@ -1,17 +1,10 @@
 ### Workflow Candidate
-- owning skill: opencode-secure-mcp
-- phase: registration / migration
-- trigger / symptom: MCP registration was only captured as a Codex-specific script, while skills and AGENTS.md already had cross-vendor installers.
-- action: add top-level `install_mcps.py` plus manifest(s) under `~/.agents/mcps/`.
-- verify: unit tests, dry-run, and real Codex reinstall/list validation.
-- fallback: use `skills/opencode-secure-mcp/scripts/register_opencode_secure_mcp.sh` for Codex-only recovery.
-- workflow effect: branch
-- promote to: `install_mcps.py`, `mcps/opencode_secure.json`, and `opencode-secure-mcp/SKILL.md`
+- owning skill: none yet (install_mcps.py governance)
+- phase: discovery
+- trigger / symptom: install_mcps.py lacks opencode vendor despite opencode having native MCP config
+- action: treat opencode as config-backed vendor with top-level mcp map; local uses command array and environment, remote uses url
+- verify: unit tests + opencode mcp list after install
+- fallback: if CLI contract proves necessary later, route install through opencode SDK/CLI wrapper
+- workflow effect: extend reusable MCP install flow to opencode
+- promote to: mcps/README.md and install_mcps.py
 - status: promoted
-
-Promotion evidence:
-- script: `/home/nzzhao/.agents/install_mcps.py`
-- manifest: `/home/nzzhao/.agents/mcps/opencode_secure.json`
-- reference: `/home/nzzhao/.agents/mcps/README.md`
-- workflow: `/home/nzzhao/.agents/skills/opencode-secure-mcp/SKILL.md`
-- real one-click validation: `python3 /home/nzzhao/.agents/install_mcps.py --scope user --all`

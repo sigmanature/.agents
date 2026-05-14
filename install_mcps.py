@@ -7,6 +7,7 @@ Install MCP server manifests from ~/.agents/mcps into supported agent vendors.
 Examples:
   python3 install_mcps.py --scope user --vendor codex --all
   python3 install_mcps.py opencode_secure --scope user --vendor codex --dry-run
+  python3 install_mcps.py opencode_secure --scope user --vendor opencode
   python3 install_mcps.py opencode_secure --scope project --vendor roo --workspace /path/to/repo
   python3 install_mcps.py opencode_secure --scope user --vendor codex --uninstall
 """
@@ -25,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 
-VENDORS = ("codex", "claude", "roo")
+VENDORS = ("codex", "claude", "roo", "opencode")
 PRUNE_DIRS = {
     ".git",
     "node_modules",
@@ -38,6 +39,7 @@ PRUNE_DIRS = {
     ".vscode",
     ".DS_Store",
 }
+OPENCODE_CONFIG_FILENAMES = ("opencode.jsonc", "opencode.json")
 
 
 @dataclass(frozen=True)
@@ -129,10 +131,102 @@ def parse_manifest(raw: dict[str, Any], source: Path, home: Path | None = None) 
 
 
 def load_manifest(path: Path, home: Path | None = None) -> McpManifest:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError(f"{path}: manifest root must be an object")
+    raw = read_json_object(path)
     return parse_manifest(raw, source=path, home=home)
+
+
+def strip_json_comments(text: str) -> str:
+    out: list[str] = []
+    i = 0
+    in_string = False
+    escaped = False
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+
+        if in_string:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+
+        if ch == "/" and nxt == "/":
+            i += 2
+            while i < len(text) and text[i] not in "\r\n":
+                i += 1
+            continue
+
+        if ch == "/" and nxt == "*":
+            i += 2
+            while i + 1 < len(text) and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i = min(i + 2, len(text))
+            continue
+
+        out.append(ch)
+        i += 1
+
+    return "".join(out)
+
+
+def strip_trailing_commas(text: str) -> str:
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+
+        if in_string:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+
+        if ch == ",":
+            j = i + 1
+            while j < len(text) and text[j].isspace():
+                j += 1
+            if j < len(text) and text[j] in "}]":
+                i += 1
+                continue
+
+        out.append(ch)
+        i += 1
+
+    return "".join(out)
+
+
+def parse_json_text(text: str, *, source: Path) -> dict[str, Any]:
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        raw = json.loads(strip_trailing_commas(strip_json_comments(text)))
+    if not isinstance(raw, dict):
+        raise ValueError(f"{source}: JSON root must be an object")
+    return raw
 
 
 def default_manifest_root(home: Path | None = None) -> Path:
@@ -245,10 +339,7 @@ def uninstall_cli_vendor(vendor: str, name: str, *, scope: str, dry_run: bool) -
 def read_json_object(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError(f"{path}: JSON root must be an object")
-    return raw
+    return parse_json_text(path.read_text(encoding="utf-8"), source=path)
 
 
 def write_json_object(path: Path, data: dict[str, Any], *, dry_run: bool) -> None:
@@ -303,6 +394,28 @@ def roo_server_config(mcp: McpManifest) -> dict[str, Any]:
     return server
 
 
+def opencode_server_config(mcp: McpManifest) -> dict[str, Any]:
+    if mcp.transport == "stdio":
+        server: dict[str, Any] = {
+            "type": "local",
+            "command": [mcp.command or "", *mcp.args],
+            "enabled": True,
+        }
+        if mcp.env:
+            server["environment"] = mcp.env
+        if mcp.cwd:
+            print(f"[WARN] opencode config does not support cwd directly; ignoring cwd for {mcp.name}")
+        return server
+
+    if mcp.cwd:
+        print(f"[WARN] opencode config does not support cwd directly; ignoring cwd for {mcp.name}")
+    return {
+        "type": "remote",
+        "url": mcp.url,
+        "enabled": True,
+    }
+
+
 def install_roo_config(config_path: Path, mcp: McpManifest, *, dry_run: bool) -> None:
     data = read_json_object(config_path)
     servers = data.setdefault("mcpServers", {})
@@ -315,6 +428,25 @@ def install_roo_config(config_path: Path, mcp: McpManifest, *, dry_run: bool) ->
 def uninstall_roo_config(config_path: Path, name: str, *, dry_run: bool) -> None:
     data = read_json_object(config_path)
     servers = data.get("mcpServers")
+    if not isinstance(servers, dict) or name not in servers:
+        print(f"[SKIP] {config_path}: {name} not configured")
+        return
+    del servers[name]
+    write_json_object(config_path, data, dry_run=dry_run)
+
+
+def install_opencode_config(config_path: Path, mcp: McpManifest, *, dry_run: bool) -> None:
+    data = read_json_object(config_path)
+    servers = data.setdefault("mcp", {})
+    if not isinstance(servers, dict):
+        raise ValueError(f"{config_path}: mcp must be an object")
+    servers[mcp.name] = opencode_server_config(mcp)
+    write_json_object(config_path, data, dry_run=dry_run)
+
+
+def uninstall_opencode_config(config_path: Path, name: str, *, dry_run: bool) -> None:
+    data = read_json_object(config_path)
+    servers = data.get("mcp")
     if not isinstance(servers, dict) or name not in servers:
         print(f"[SKIP] {config_path}: {name} not configured")
         return
@@ -350,6 +482,49 @@ def roo_config_paths(scope: str, *, home: Path, workspaces: list[str], max_depth
     return find_project_roo_configs(Path.cwd(), max_depth=max_depth)
 
 
+def opencode_config_path_for_workspace(workspace: Path) -> Path:
+    workspace = workspace.expanduser().resolve()
+    for filename in OPENCODE_CONFIG_FILENAMES:
+        candidate = workspace / filename
+        if candidate.exists():
+            return candidate
+    return workspace / "opencode.json"
+
+
+def find_project_opencode_configs(root: Path, max_depth: int) -> list[Path]:
+    root = root.resolve()
+    found: set[Path] = set()
+    for dirpath, dirnames, filenames in os.walk(root):
+        current = Path(dirpath)
+        try:
+            depth = len(current.relative_to(root).parts)
+        except ValueError:
+            depth = 0
+        if depth > max_depth:
+            dirnames[:] = []
+            continue
+        dirnames[:] = [d for d in dirnames if d not in PRUNE_DIRS]
+        if "opencode.jsonc" in filenames:
+            found.add((current / "opencode.jsonc").resolve())
+            continue
+        if "opencode.json" in filenames:
+            found.add((current / "opencode.json").resolve())
+            continue
+        if ".opencode" in dirnames:
+            found.add((current / "opencode.json").resolve())
+    return sorted(found)
+
+
+def opencode_config_paths(scope: str, *, home: Path, workspaces: list[str], max_depth: int) -> list[Path]:
+    if scope == "user":
+        return [home / ".config" / "opencode" / "opencode.json"]
+
+    if workspaces:
+        return [opencode_config_path_for_workspace(Path(ws)) for ws in workspaces]
+
+    return find_project_opencode_configs(Path.cwd(), max_depth=max_depth)
+
+
 def selected_vendors(mcp: McpManifest, explicit: list[str] | None) -> list[str]:
     if explicit:
         return list(dict.fromkeys(explicit))
@@ -374,6 +549,12 @@ def install_manifest(
                 print("[WARN] no Roo .roo directories found for project scope")
             for path in paths:
                 install_roo_config(path, mcp, dry_run=dry_run)
+        elif vendor == "opencode":
+            paths = opencode_config_paths(scope, home=home, workspaces=workspaces, max_depth=max_depth)
+            if scope == "project" and not paths:
+                print("[WARN] no OpenCode workspaces found for project scope")
+            for path in paths:
+                install_opencode_config(path, mcp, dry_run=dry_run)
         else:
             install_cli_vendor(vendor, mcp, scope=scope, dry_run=dry_run)
 
@@ -393,6 +574,9 @@ def uninstall_manifest(
         if vendor == "roo":
             for path in roo_config_paths(scope, home=home, workspaces=workspaces, max_depth=max_depth):
                 uninstall_roo_config(path, mcp.name, dry_run=dry_run)
+        elif vendor == "opencode":
+            for path in opencode_config_paths(scope, home=home, workspaces=workspaces, max_depth=max_depth):
+                uninstall_opencode_config(path, mcp.name, dry_run=dry_run)
         else:
             uninstall_cli_vendor(vendor, mcp.name, scope=scope, dry_run=dry_run)
 

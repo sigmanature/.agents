@@ -35,7 +35,7 @@ SER=18281FDF6007HB
 OUT=output/f2fs_wb_stream_$(date +%Y%m%d_%H%M%S)
 
 SYSRQ_ENABLE=0 \
-/home/nzzhao/.agents/skills/f2fs-klog-wb/scripts/adb_grab_su.sh \
+/home/nzzhao/.agents/skills/kernel-log-instrumentor/scripts/adb_grab_su.sh \
   -o "$OUT" "$SER"
 ```
 

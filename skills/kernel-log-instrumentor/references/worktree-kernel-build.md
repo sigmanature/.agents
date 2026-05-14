@@ -1,7 +1,7 @@
 # Worktree-first kernel log flow
 
 ## When to use
-Use this flow when temporary kernel debug logs should stay isolated from the user's main checkout, especially in `~/learn_os` where Codex often builds and tests from disposable worktrees.
+Use this flow only when a temporary worktree is actually needed. If the repo already has a long-lived debug lane, use that first and reserve this document for isolation, risky rebases, or parallel conflicting experiments.
 
 ## Create the temp branch in its own worktree
 Preferred helper:

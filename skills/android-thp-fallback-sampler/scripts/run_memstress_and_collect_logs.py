@@ -39,7 +39,7 @@ from utils.task_pool import TaskPool
 
 # === CONFIG (edit here) ===
 CONFIG = {
-    "duration_s": 6 * 3600,
+    "max_cycles": 1200,
     "interval_s": 60,
     "stats_dir": DEFAULT_STATS_DIR,
     "counters": list(DEFAULT_COUNTERS),
@@ -73,6 +73,13 @@ CONFIG = {
         # Optional: treat cycles as "rounds", and force-stop all target packages at each round boundary.
         # 0 disables this mode.
         "round_s": 0,
+        "selection_mode": "epoch",
+        "epoch_reshuffle": True,
+        "victim_packages": [],
+        "victim_exclude_from_churn": True,
+        "victim_prime_hold_ms": 3000,
+        "victim_revisit_every_cycles": 0,
+        "victim_revisit_hold_ms": 1500,
         "seed": 12345,
         "clear_logcat": True,
     },
@@ -135,6 +142,15 @@ def exit_to_home(serial: str):
     return adb_shell_cp(serial, "am start -a android.intent.action.MAIN -c android.intent.category.HOME", timeout_s=20, check=False)
 
 
+def write_trace_marker(serial: str, message: str):
+    safe = message.replace("\\", "\\\\").replace('"', '\\"')
+    cmd = (
+        "su -c "
+        f"\"sh -c 'echo \\\"{safe}\\\" > /sys/kernel/debug/tracing/trace_marker'\""
+    )
+    return adb_shell_cp(serial, cmd, timeout_s=10, check=False)
+
+
 def force_stop_packages(serial: str, pkgs: Sequence[str]) -> List[Dict]:
     """Best-effort `am force-stop` for each pkg; returns per-pkg results for logging."""
 
@@ -150,16 +166,6 @@ def force_stop_packages(serial: str, pkgs: Sequence[str]) -> List[Dict]:
             }
         )
     return results
-
-
-def maybe_sleep(ms: int, deadline: Optional[float]) -> None:
-    if ms <= 0:
-        return
-    remaining = ms / 1000.0
-    if deadline is not None:
-        remaining = min(remaining, max(0.0, deadline - time.time()))
-    if remaining > 0:
-        time.sleep(remaining)
 
 
 def classify_heavy_packages(pkgs: Sequence[str], explicit_heavy: Sequence[str], keywords: Sequence[str]) -> List[str]:
@@ -188,6 +194,111 @@ def take_from_pool(pool: Deque[str], count: int, banned: Set[str]) -> List[str]:
         picked.append(item)
         seen_this_round.add(item)
     return picked
+
+
+@dataclass
+class EpochPackagePool:
+    """Pick packages without replacement inside one epoch.
+
+    The pool is shuffled at epoch boundaries, then consumed in order.
+    This makes the no-replacement behavior explicit instead of relying on a
+    rotating deque side effect.
+    """
+
+    items: Sequence[str]
+    seed: int
+    reshuffle_each_epoch: bool = True
+
+    def __post_init__(self) -> None:
+        self._items = list(dict.fromkeys(self.items))
+        self._rng = random.Random(int(self.seed))
+        self._queue: Deque[str] = deque()
+        self.epoch = 0
+        self._start_new_epoch(initial=True)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def _start_new_epoch(self, *, initial: bool) -> None:
+        self.epoch += 1
+        ordered = list(self._items)
+        if self.reshuffle_each_epoch or initial:
+            self._rng.shuffle(ordered)
+        self._queue = deque(ordered)
+
+    def take(self, count: int, banned: Set[str]) -> List[str]:
+        if count <= 0 or not self._items:
+            return []
+
+        picked: List[str] = []
+        picked_set: Set[str] = set()
+        epoch_budget = max(1, len(self._items) + 1)
+
+        while len(picked) < count and epoch_budget > 0:
+            if not self._queue:
+                self._start_new_epoch(initial=False)
+                epoch_budget -= 1
+                continue
+
+            item = self._queue.popleft()
+            if item in banned or item in picked_set:
+                continue
+            picked.append(item)
+            picked_set.add(item)
+
+        return picked
+
+
+def filter_churn_packages(
+    packages: Sequence[str],
+    *,
+    victim_packages: Sequence[str],
+    exclude_victim: bool,
+) -> List[str]:
+    if not victim_packages or not exclude_victim:
+        return list(packages)
+    victim_set = set(victim_packages)
+    return [pkg for pkg in packages if pkg not in victim_set]
+
+
+def launch_and_background(
+    *,
+    serial: str,
+    package: str,
+    component: str,
+    hold_ms: int,
+    trace_label: Optional[str] = None,
+) -> Dict:
+    host_ts = time.time()
+    row: Dict = {
+        "package": package,
+        "component": component,
+        "host_ts": int(host_ts),
+        "host_ts_sec": round(host_ts, 6),
+        "hold_ms": int(hold_ms),
+    }
+    if trace_label:
+        marker = f"memstress:{trace_label}:begin package={package} component={component}"
+        trace_cp = write_trace_marker(serial, marker)
+        row["trace_marker_begin_rc"] = trace_cp.returncode
+    cp = start_activity(serial, component)
+    stdout_text = cp.stdout or ""
+    ok = cp.returncode == 0 and "Error:" not in stdout_text and "Exception occurred" not in stdout_text
+    row["returncode"] = cp.returncode
+    row["stdout_tail"] = stdout_text.strip()[-300:]
+    row["stderr_tail"] = (cp.stderr or "").strip()[-300:]
+    row["ok"] = ok
+    if ok:
+        time.sleep(max(0, int(hold_ms) / 1000.0))
+        home_cp = exit_to_home(serial)
+        row["home_returncode"] = home_cp.returncode
+        row["home_stdout_tail"] = (home_cp.stdout or "").strip()[-200:]
+        row["home_stderr_tail"] = (home_cp.stderr or "").strip()[-200:]
+    if trace_label:
+        marker = f"memstress:{trace_label}:end package={package} ok={1 if ok else 0}"
+        trace_cp = write_trace_marker(serial, marker)
+        row["trace_marker_end_rc"] = trace_cp.returncode
+    return row
 
 
 @dataclass
@@ -234,7 +345,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     p.add_argument("--out-dir", "--out", dest="out_dir", default=None, help="Output directory")
 
-    p.add_argument("--duration-s", type=int, default=CONFIG["duration_s"], help="Total duration seconds")
+    p.add_argument("--max-cycles", type=int, default=CONFIG["max_cycles"], help="Total memstress cycles to run (replaces duration)")
     p.add_argument("--interval-s", type=int, default=CONFIG["interval_s"], help="Sampling interval seconds")
     p.add_argument("--stats-dir", default=CONFIG["stats_dir"], help="Stats dir for counters")
     p.add_argument("--counters", default=",".join(CONFIG["counters"]), help="Comma-separated counter files to sample")
@@ -275,6 +386,18 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--burst-size", type=int, default=CONFIG["memstress"]["burst_size"])
     p.add_argument("--heavy-per-burst", type=int, default=CONFIG["memstress"]["heavy_per_burst"])
     p.add_argument(
+        "--selection-mode",
+        choices=["epoch"],
+        default=CONFIG["memstress"]["selection_mode"],
+        help="Package selection policy. 'epoch' means shuffle once per epoch, then consume without replacement.",
+    )
+    p.add_argument(
+        "--epoch-reshuffle",
+        action=argparse.BooleanOptionalAction,
+        default=CONFIG["memstress"]["epoch_reshuffle"],
+        help="When using --selection-mode epoch, reshuffle package order at each epoch boundary.",
+    )
+    p.add_argument(
         "--hold-ms",
         type=int,
         default=CONFIG["memstress"]["hold_ms"],
@@ -294,6 +417,31 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=CONFIG["memstress"]["clear_logcat"],
         help="Clear logcat before starting workload/log collection",
+    )
+    p.add_argument("--victim-package", action="append", default=None, help="Victim package(s) to prime and revisit periodically outside the churn set (repeatable)")
+    p.add_argument(
+        "--victim-exclude-from-churn",
+        action=argparse.BooleanOptionalAction,
+        default=CONFIG["memstress"]["victim_exclude_from_churn"],
+        help="Exclude --victim-package from the churn package pool (default: true)",
+    )
+    p.add_argument(
+        "--victim-prime-hold-ms",
+        type=int,
+        default=CONFIG["memstress"]["victim_prime_hold_ms"],
+        help="Foreground hold time for the one-time victim prime step.",
+    )
+    p.add_argument(
+        "--victim-revisit-every-cycles",
+        type=int,
+        default=CONFIG["memstress"]["victim_revisit_every_cycles"],
+        help="If >0, revisit the victim via the normal launcher path after every N churn cycles.",
+    )
+    p.add_argument(
+        "--victim-revisit-hold-ms",
+        type=int,
+        default=CONFIG["memstress"]["victim_revisit_hold_ms"],
+        help="Foreground hold time for victim revisit launches.",
     )
     p.add_argument("--oat-prune-watch", action="store_true", help="Poll target packages and delete regenerated oat/odex/vdex/art")
     p.add_argument("--oat-prune-package", action="append", default=None, help="Explicit package to watch for oat pruning (repeatable)")
@@ -329,7 +477,8 @@ def run_one_device(
     memstress_out = out_dir / "memstress"
     memstress_out.mkdir(parents=True, exist_ok=True)
 
-    duration_s = max(1, int(args.duration_s))
+    max_cycles = max(1, int(args.max_cycles))
+    duration_s = max_cycles * max(1, int(args.interval_s))
     round_s = max(0, int(args.round_s))
     counters = [x.strip() for x in str(args.counters).split(",") if x.strip()]
     setup_cmds = CONFIG["setup_shell"] if args.setup_shell is None else list(args.setup_shell)
@@ -347,6 +496,8 @@ def run_one_device(
     else:
         all_pkgs.extend(CONFIG["memstress"]["packages"])
     all_pkgs.extend(read_package_file(args.package_file))
+    if args.victim_package:
+        all_pkgs.extend(args.victim_package)
     all_pkgs = unique_preserve_order(all_pkgs)
     if not all_pkgs:
         raise RuntimeError("memstress requires at least one --package/--package-file (or CONFIG['memstress']['packages'])")
@@ -364,7 +515,7 @@ def run_one_device(
         "start_host_ts": int(time.time()),
         "status": "init",
         "config": {
-            "duration_s": duration_s,
+            "max_cycles": max_cycles,
             "interval_s": int(args.interval_s),
             "stats_dir": stats_dir,
             "counters": counters,
@@ -388,10 +539,17 @@ def run_one_device(
                 "prefer_keywords": args.prefer_keywords,
                 "burst_size": int(args.burst_size),
                 "heavy_per_burst": int(args.heavy_per_burst),
+                "selection_mode": args.selection_mode,
+                "epoch_reshuffle": bool(args.epoch_reshuffle),
                 "hold_ms": int(args.hold_ms),
                 "launch_gap_ms": int(args.launch_gap_ms),
                 "cycle_sleep_ms": int(args.cycle_sleep_ms),
                 "round_s": round_s,
+                "victim_packages": args.victim_package or [],
+                "victim_exclude_from_churn": bool(args.victim_exclude_from_churn),
+                "victim_prime_hold_ms": int(args.victim_prime_hold_ms),
+                "victim_revisit_every_cycles": int(args.victim_revisit_every_cycles),
+                "victim_revisit_hold_ms": int(args.victim_revisit_hold_ms),
                 "seed": int(args.seed),
                 "clear_logcat": bool(args.clear_logcat),
             },
@@ -460,6 +618,27 @@ def run_one_device(
         if not runnable_pkgs:
             raise RuntimeError("no launchable packages resolved for memstress workload")
 
+        raw_victim_packages: List[str] = []
+        if args.victim_package:
+            raw_victim_packages = unique_preserve_order(args.victim_package)
+        victim_packages: List[str] = [pkg.strip() for pkg in raw_victim_packages if pkg.strip()]
+        victim_components: Dict[str, str] = {}
+        for pkg in victim_packages:
+            if pkg not in set(valid_pkgs):
+                raise RuntimeError(f"victim package is not installed: {pkg}")
+            comp = resolve_activity(serial, pkg)
+            if not comp:
+                raise RuntimeError(f"victim package is installed but not launchable: {pkg}")
+            victim_components[pkg] = comp
+
+        runnable_pkgs = filter_churn_packages(
+            runnable_pkgs,
+            victim_packages=victim_packages,
+            exclude_victim=bool(args.victim_exclude_from_churn),
+        )
+        if not runnable_pkgs:
+            raise RuntimeError("no launchable churn packages remain after victim filtering")
+
         keywords = [x.strip().lower() for x in str(args.prefer_keywords).split(",") if x.strip()]
         inferred_heavy = classify_heavy_packages(runnable_pkgs, explicit_heavy, keywords)
 
@@ -470,6 +649,9 @@ def run_one_device(
             "skipped_not_installed": skipped_pkgs,
             "skipped_unresolved": unresolved,
             "resolved_activities": resolved,
+            "victim_packages": victim_packages,
+            "victim_components": victim_components,
+            "victim_excluded_from_churn": bool(victim_packages and args.victim_exclude_from_churn),
         }
         oat_watch_targets = resolve_oat_watch_packages(
             default_packages=valid_pkgs,
@@ -494,7 +676,6 @@ def run_one_device(
                     counters=counters,
                     use_su=bool(args.use_su),
                     interval_s=max(1, int(args.interval_s)),
-                    duration_s=duration_s,
                     out_csv=out_dir / "raw_samples.csv",
                     retries=max(0, int(args.sample_retries)),
                     retry_sleep_s=max(0, int(args.sample_retry_sleep_s)),
@@ -567,26 +748,42 @@ def run_one_device(
             start_meminfo = adb_shell_cp(serial, "dumpsys meminfo", timeout_s=60, check=False)
             (memstress_out / "dumpsys_meminfo_start.txt").write_text(start_meminfo.stdout or "", encoding="utf-8")
 
-            rng = random.Random(int(args.seed))
-            all_pool_list = list(runnable_pkgs)
-            heavy_pool_list = [pkg for pkg in runnable_pkgs if pkg in set(inferred_heavy)]
-            rng.shuffle(all_pool_list)
-            rng.shuffle(heavy_pool_list)
-            all_pool: Deque[str] = deque(all_pool_list)
-            heavy_pool: Deque[str] = deque(heavy_pool_list)
+            all_pool = EpochPackagePool(
+                runnable_pkgs,
+                seed=int(args.seed),
+                reshuffle_each_epoch=bool(args.epoch_reshuffle),
+            )
+            heavy_pool = EpochPackagePool(
+                [pkg for pkg in runnable_pkgs if pkg in set(inferred_heavy)],
+                seed=int(args.seed) + 1,
+                reshuffle_each_epoch=bool(args.epoch_reshuffle),
+            )
 
             cycle = 0
             rounds = 1
             launched_total = 0
-            deadline = time.time() + duration_s
             round_start = time.time()
 
             manifest["status"] = "running"
             write_run_manifest(out_dir / "run_manifest.json", manifest)
 
-            while not stop.is_set():
-                if time.time() >= deadline:
-                    break
+            for vp in victim_packages:
+                comp = victim_components.get(vp)
+                if not comp:
+                    continue
+                victim_prime = launch_and_background(
+                    serial=serial,
+                    package=vp,
+                    component=comp,
+                    hold_ms=int(args.victim_prime_hold_ms),
+                    trace_label="victim_prime",
+                )
+                victim_prime["event"] = "victim_prime"
+                cycle_log_f.write(json.dumps(victim_prime, ensure_ascii=False) + "\n")
+                cycle_log_f.flush()
+                time.sleep(max(0, int(args.launch_gap_ms) / 1000.0))
+
+            while not stop.is_set() and cycle < max_cycles:
                 if round_s > 0 and (time.time() - round_start) >= float(round_s):
                     boundary_row = {
                         "event": "round_boundary",
@@ -600,16 +797,17 @@ def run_one_device(
                     round_start = time.time()
 
                 cycle += 1
+                write_trace_marker(serial, f"memstress:cycle:begin cycle={cycle}")
                 chosen: List[str] = []
                 chosen_set: Set[str] = set()
 
                 heavy_target = min(int(args.heavy_per_burst), int(args.burst_size), len(heavy_pool))
-                for pkg in take_from_pool(heavy_pool, heavy_target, chosen_set):
+                for pkg in heavy_pool.take(heavy_target, chosen_set):
                     chosen.append(pkg)
                     chosen_set.add(pkg)
 
                 remain = max(0, int(args.burst_size) - len(chosen))
-                for pkg in take_from_pool(all_pool, remain, chosen_set):
+                for pkg in all_pool.take(remain, chosen_set):
                     chosen.append(pkg)
                     chosen_set.add(pkg)
 
@@ -625,38 +823,63 @@ def run_one_device(
                 }
 
                 for pkg in chosen:
-                    if stop.is_set() or time.time() >= deadline:
+                    if stop.is_set():
                         break
                     component = resolved[pkg]
-                    cp = start_activity(serial, component)
-                    stdout_text = (cp.stdout or "")
-                    ok = cp.returncode == 0 and "Error:" not in stdout_text and "Exception occurred" not in stdout_text
-                    if ok:
+                    launch_row = launch_and_background(
+                        serial=serial,
+                        package=pkg,
+                        component=component,
+                        hold_ms=int(args.hold_ms),
+                    )
+                    if launch_row["ok"]:
                         cycle_row["launched"].append(pkg)
                         launched_total += 1
-
-                        # Keep the just-launched app in foreground for a short dwell time.
-                        maybe_sleep(int(args.hold_ms), deadline)
-
-                        # Exit foreground without killing the process.
-                        exit_to_home(serial)
                     else:
                         cycle_row["launch_errors"].append({
                             "package": pkg,
-                            "returncode": cp.returncode,
-                            "stderr": (cp.stderr or "").strip(),
-                            "stdout_tail": stdout_text.strip()[-300:],
+                            "returncode": launch_row["returncode"],
+                            "stderr": launch_row["stderr_tail"],
+                            "stdout_tail": launch_row["stdout_tail"],
                         })
-                    maybe_sleep(int(args.launch_gap_ms), deadline)
+                    time.sleep(max(0, int(args.launch_gap_ms) / 1000.0))
 
                 cycle_log_f.write(json.dumps(cycle_row, ensure_ascii=False) + "\n")
                 cycle_log_f.flush()
+                write_trace_marker(
+                    serial,
+                    f"memstress:cycle:end cycle={cycle} launched={len(cycle_row['launched'])} errors={len(cycle_row['launch_errors'])}",
+                )
                 print(
                     f"[{serial}][memstress] cycle={cycle} launched={len(cycle_row['launched'])} "
                     f"errors={len(cycle_row['launch_errors'])}"
                 )
 
-                maybe_sleep(int(args.cycle_sleep_ms), deadline)
+                revisit_every = int(args.victim_revisit_every_cycles)
+                if (
+                    victim_packages
+                    and revisit_every > 0
+                    and cycle % revisit_every == 0
+                ):
+                    victim_idx = (cycle // revisit_every) % len(victim_packages)
+                    vp = victim_packages[victim_idx]
+                    comp = victim_components.get(vp)
+                    if comp:
+                        victim_revisit = launch_and_background(
+                            serial=serial,
+                            package=vp,
+                            component=comp,
+                            hold_ms=int(args.victim_revisit_hold_ms),
+                            trace_label="victim_revisit",
+                        )
+                        victim_revisit["event"] = "victim_revisit"
+                        victim_revisit["cycle"] = cycle
+                        victim_revisit["victim_idx"] = victim_idx
+                        cycle_log_f.write(json.dumps(victim_revisit, ensure_ascii=False) + "\n")
+                        cycle_log_f.flush()
+                        time.sleep(max(0, int(args.launch_gap_ms) / 1000.0))
+
+                time.sleep(max(0, int(args.cycle_sleep_ms) / 1000.0))
 
             end_meminfo = adb_shell_cp(serial, "dumpsys meminfo", timeout_s=60, check=False)
             (memstress_out / "dumpsys_meminfo_end.txt").write_text(end_meminfo.stdout or "", encoding="utf-8")

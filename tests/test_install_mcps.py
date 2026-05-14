@@ -21,7 +21,7 @@ class InstallMcpsTest(unittest.TestCase):
             "command": "bash",
             "args": ["~/.agents/demo_entry.sh"],
             "env": {"DEMO": "1"},
-            "vendors": ["codex", "claude", "roo"],
+            "vendors": ["codex", "claude", "roo", "opencode"],
         }
 
     def test_load_manifest_expands_home_in_command_arguments_and_env(self):
@@ -121,6 +121,73 @@ class InstallMcpsTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "Codex MCP registration is global"):
                 install_mcps.install_cli_vendor("codex", mcp, scope="project", dry_run=True)
+
+    def test_opencode_install_preserves_existing_entries_and_uninstall_removes_only_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            config = root / "opencode.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "provider": {"demo": {"npm": "@ai-sdk/openai"}},
+                        "mcp": {
+                            "keep": {
+                                "type": "remote",
+                                "url": "https://example.com/mcp",
+                                "enabled": False,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            mcp = install_mcps.parse_manifest(self.manifest(), source=root / "demo.json", home=root)
+
+            install_mcps.install_opencode_config(config, mcp, dry_run=False)
+            data = json.loads(config.read_text(encoding="utf-8"))
+
+            self.assertIn("provider", data)
+            self.assertIn("keep", data["mcp"])
+            self.assertEqual(
+                data["mcp"]["demo"],
+                {
+                    "type": "local",
+                    "command": ["bash", str(root / ".agents/demo_entry.sh")],
+                    "environment": {"DEMO": "1"},
+                    "enabled": True,
+                },
+            )
+
+            install_mcps.uninstall_opencode_config(config, "demo", dry_run=False)
+            data = json.loads(config.read_text(encoding="utf-8"))
+            self.assertEqual(set(data["mcp"].keys()), {"keep"})
+
+    def test_opencode_remote_manifest_is_written_as_remote_server(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            config = root / "opencode.json"
+            mcp = install_mcps.parse_manifest(
+                {
+                    "name": "remote-demo",
+                    "transport": "sse",
+                    "url": "https://example.com/sse",
+                    "vendors": ["opencode"],
+                },
+                source=root / "remote-demo.json",
+                home=root,
+            )
+
+            install_mcps.install_opencode_config(config, mcp, dry_run=False)
+            data = json.loads(config.read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                data["mcp"]["remote-demo"],
+                {
+                    "type": "remote",
+                    "url": "https://example.com/sse",
+                    "enabled": True,
+                },
+            )
 
 
 if __name__ == "__main__":
