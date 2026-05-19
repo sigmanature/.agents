@@ -22,6 +22,8 @@ events=(
     vma_start_write_wait_start
     vma_start_write_wait_end
     vma_start_write_done
+    vma_start_read_fail
+    fault_mmap_lock_fallback
     mmap_lock_wait_start
     mmap_lock_wait_end
     mmap_lock_hold_start
@@ -58,6 +60,8 @@ stack_events=(
     vma_start_write_wait_start
     vma_start_write_wait_end
     vma_start_write_done
+    vma_start_read_fail
+    fault_mmap_lock_fallback
     filemap_fault_begin
     filemap_fault_wait_start
     filemap_fault_wait_end

@@ -44,6 +44,7 @@ for evt in filemap_fault_begin filemap_fault_wait_start filemap_fault_wait_end \
            filemap_fault_retry filemap_fault_end \
            vma_start_write_begin vma_start_write_wait_start \
            vma_start_write_wait_end vma_start_write_done \
+           vma_start_read_fail fault_mmap_lock_fallback \
            mmap_lock_wait_start mmap_lock_wait_end \
            mmap_lock_hold_start mmap_lock_hold_end; do
     adb shell "su -c 'echo 1 > /sys/kernel/debug/tracing/events/$evt/enable'"
@@ -1012,6 +1013,35 @@ exact kernel build config / commit / build id
    ```
 9. **simpleperf 周期采样（cycles）不适合事件因果分析**：`-a -e cycles -g` 采集的是 CPU 周期样本，不是 syscall/tracepoint 的精确事件日志。要精确对应每个 `mprotect`/`mmap`，应使用 tracepoint 触发（`-e syscalls:sys_enter_mprotect -c 1`）或 Perfetto
 10. **不要对高频 tracepoint 无过滤地抓 callstack**：对每个 `sched_switch` 都采 callstack 会炸，应通过 `filter: "common_pid == 12345"` 缩小范围
+11. **synthetic VMA 竞争测试不要只读固定 offset**：`base[off]` 第一次 fault 后 PTE 通常已经建立，后续循环不会继续进入 `lock_vma_under_rcu()`；`(void)base[off]` 在优化编译下还可能被删掉。要制造稳定 `vma_start_read()` 面积，reader 应按页扫描多个 offset，并用 `volatile`/atomic sink 保留 load。若内核路径里临时加过 `msleep()` / delay，先移除或禁用再做 ABI/build/runtime 验证。
+
+## Workflow Contract: Synthetic VMA Contention Test
+
+### Main Workflow
+1. Map a single target file-backed VMA and dirty it once so the file size and mapping are valid.
+2. Drop PTEs with `madvise(MADV_DONTNEED)` before starting readers.
+3. Create reader and writer threads behind a start gate; release readers first so their page faults can enter `lock_vma_under_rcu()`.
+4. After a bounded delay, release writer threads to repeatedly call `mprotect()` on the same VMA.
+5. Validate trace by matching `mm`, `vm_start/vm_end`, inode/dev, and `had_reader=true` or non-zero wait duration.
+6. Report the page count, reader/writer count, compiler flags, and any kernel-side artificial delay.
+
+### Decision Table
+| Phase | Trigger / Symptom | Action | Verify | On Failure | Workflow Effect |
+|---|---|---|---|---|---|
+| Test design | Trace shows only initial `vma_start_read` events or no `had_reader=true` | Replace fixed-offset read loops with bounded page sweeps across the VMA | `vma_start_read` appears for many page offsets in the same `mm` / VMA | Increase `FAULT_PAGES_PER_READER` or `N_READERS` after preflight confirms there is no artificial delay in the mmap fault path | replace |
+| Test scheduling | Writer events appear before target reader events, or readers mostly fall back to `mmap_read_lock` | Gate both sides, release readers first, then release writers after a configurable delay | Trace shows target `vma_start_read` before `vma_start_write_wait` for the same `mm` / VMA | Increase writer delay or reduce writer count for the first proof run | replace |
+| Build | Optimized binary emits no useful reader faults | Accumulate loads into a `volatile` or atomic sink | Binary prints or otherwise consumes the sink | Compile with lower optimization only as a fallback | block |
+| Preflight | Kernel code contains artificial `sleep` / `msleep()` / delay in the mmap fault or VMA-lock path | Remove it, or isolate it behind an explicit debug-only gate that is disabled for ABI/build validation | `rg -n "msleep|ssleep|usleep|mdelay|udelay" mm/mmap_lock.c arch/*/mm/fault.c include/linux/mmap_lock.h` has no ungated delay in the traced path | Do not run ABI/build validation until the delay is removed or explicitly justified | block |
+| Trace capture | Trace output is dominated by the trace helper, shell utilities, or unrelated short-lived processes | Start the workload behind a gate, get its TGID, set per-event tracefs filters such as `tgid == $TGID`, then release the workload | `trace.status` records the TGID filter, and trace rows show only the target TGID / target VMA identity | Discard the unfiltered run as non-diagnostic, then rerun with TGID filtering before interpreting `had_reader` or fallback absence | replace |
+| Trace validation | Writer events do not overlap the target reader VMA | Match by `mm`, `vm_start/vm_end`, inode/dev, not just process name | Same VMA identity appears in read and write events | Narrow the test to one VMA and one writer pattern | block |
+
+### Output Contract
+- phase reached:
+- decision path taken:
+- verification evidence:
+- fallback used:
+- unresolved blocker:
+- next workflow step:
 
 ## 用户态调用栈采集（simpleperf）
 
