@@ -100,6 +100,8 @@ Pixel/Slider variant:
 
 - If the workspace uses `private/google-modules/soc/gs/build_slider.sh`, run it from the `pixel/` repo root, not from `private/google-modules/soc/gs/`.
 - Reason: the script executes `tools/bazel` via a cwd-relative path; invoking it from the subdirectory fails before compilation with `tools/bazel: No such file or directory`.
+- If using a repo-root lane wrapper such as `./build_slider.sh --lane my_dec`, first run `./build_slider.sh --lane my_dec --dry-run` and record `workspace=`, `common=`, `output_root=`, and `dist=`.
+- For `my_dec`, the source should resolve through `out/workspaces/slider_my_dec/common -> common_my_dec`, while final images land under `out/workspaces/slider_my_dec/out/slider/dist`, not the root `out/slider/dist`.
 - If Bazel dies during server startup with `channel not registered to an event loop`, classify it as a build-environment blocker first, not a source compile result. Capture the `out/bazel/.../server/jvm.out` path in the report.
 - For compile-only sanity checks, prefer `tools/bazel build ...` (not `build_slider.sh`, which is a `bazel run` wrapper). Reference: `references/pixel-slider-bazel-build.md`.
 - For “make a new Kconfig symbol land in boot.img via Kleaf fragments”, follow: `references/pixel-kleaf-config-fragment-bootimg.md`.
@@ -214,6 +216,7 @@ If blocked, report exact blocker and minimal unblock command.
 7. Pixel slider build entrypoint is cwd-sensitive.
    - `private/google-modules/soc/gs/build_slider.sh` must be launched from the `pixel/` repo root.
    - A failure at `tools/bazel: No such file or directory` is an invocation-path issue, not a kernel build failure.
+   - For lane builds, check the wrapper's `--dry-run` output and inspect that lane's declared `dist=` directory; do not compare against root `out/slider/dist` unless the active lane is the root/debug workspace.
 8. Existing query/preserve tooling must survive resume and compression.
    - If the current round already has stream capture, inode watchers, field-query helpers, or event-layer artifacts, record them in the checkpoint and reload that checkpoint before widening the search.
    - Do not fall back to broad raw-log search merely because the session forgot which helper was already active.

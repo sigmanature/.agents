@@ -40,6 +40,24 @@ adb devices
 # 确认设备是 device 状态
 ```
 
+如果本轮目标是观测高阶分配是否触发 direct reclaim / sync compaction，先固定并记录 THP 与文件系统 folio cap 状态：
+
+```bash
+python3 scripts/preflight_thp_folio_caps.py \
+  --serial <SERIAL> \
+  --out-dir ./output/preflight_highorder_001 \
+  --thp-enabled always \
+  --thp-defrag always \
+  --mthp-enabled always \
+  --folio-cap 2
+```
+
+该脚本会输出 `preflight.json` 和 `preflight.md`，重点确认：
+- f2fs/ext4 是否存在 `max_folio_order_cap` / `min_folio_order_cap`
+- cap 写入后实际值是否为 2
+- mTHP anon 是否启用
+- `mm_page_alloc`、direct reclaim、compaction、readahead tracepoint 是否存在
+
 ### 1) 可选：批量安装 APK
 
 > 批量安装能力由 `wechat-wxapkg-and-apk-batch-tools` skill 统一维护，本 skill 仅复用该能力。
@@ -93,6 +111,32 @@ python3 scripts/run_memstress_and_collect_logs.py \
   --burst-size 4 \
   --heavy-per-burst 2 \
   --hold-ms 200
+```
+
+### 4) 短跑高阶分配 stall trace
+
+在确认 workload 能打到 page-cache / mTHP / 驱动或网络高阶分配后，用 `trace_highorder_stalls.py` 捕获 direct reclaim 和 compaction：
+
+```bash
+python3 scripts/trace_highorder_stalls.py \
+  --serial <SERIAL> \
+  --duration-s 120 \
+  --min-order 2 \
+  --out-dir ./output/highorder_stalls_001
+```
+
+它会生成：
+- `raw_trace.txt`：原始 ftrace
+- `stall_events.csv`：每次 direct reclaim / compaction 的 task、pid、order、gfp、reason、duration
+- `stall_summary_by_reason_order.csv`：按 `kind + reason + order + gfp` 聚合次数和时长
+- `stall_summary.md`：短摘要
+
+离线解析已有 trace：
+
+```bash
+python3 scripts/trace_highorder_stalls.py \
+  --parse-only ./raw_trace.txt \
+  --out-dir ./output/highorder_stalls_parse_001
 ```
 
 ---
@@ -195,10 +239,15 @@ python3 scripts/run_memstress_and_collect_logs.py \
 ## 常见坑 / 稳定性建议
 
 - **计数器是累计值**：一定用 `derived.csv` 里的 Δ 计算比率，而不是直接用 raw。
+- `__GFP_COMP` 只表示 compound page/folio 语义，不等于会同步 compact；是否可能 stall 主要看 `__GFP_DIRECT_RECLAIM`、order、迁移类型、`__GFP_NORETRY/__GFP_RETRY_MAYFAIL`、水线和碎片判断。
+- mTHP anon fault 失败会按可用 order 从高到低重试，最后回退 base page；`anon_fault_fallback` 是 mTHP order 尝试失败计数，不是用户态 fault 最终失败。
+- page-cache large folio 的 fallback 依路径不同：`__filemap_get_folio(FGP_CREAT)` 会降到 mapping min order；readahead high-order 失败会回到普通 readahead，但如果 min order 也被设成 2，fallback 仍然是 order 2。
+- 现有 tracepoint 能观测高阶分配成功和 direct reclaim/compaction stall，不能精确观测所有 driver/network `alloc_pages()` 返回 NULL；精确失败率需要 kretprobe/fprobe/eBPF 或临时 kernel instrumentation。
 - adb 偶发断开：脚本会对采样做重试，失败会记录 `error` 字段但继续跑。
 - adb 显示 `device offline`：参考 `references/adb_device_offline_recovery.md` 的恢复步骤（`adb reconnect offline` / 重启 adb server）。
 - setup 命令带重定向：本工具会统一通过 `sh -c` 执行；需要 root 的话配合 `--use-su`。
 - 某些设备写 `.../enabled` 这类 sysfs 节点时，`adb shell su -c` 不够，必须带 TTY；脚本里的 THP ensure 写入已按这个方式处理。
+- per-size mTHP 节点在不同内核上可能叫 `enabled` 或 `anon`；`preflight_thp_folio_caps.py --mthp-enabled` 会探测并写存在的节点。
 - 同类的 per-filesystem sysfs 节点也可能有这个限制，例如 Pixel 6 上的 `/sys/fs/f2fs/dm-49/max_folio_order_cap` 和 `/sys/fs/ext4/dm-3/max_folio_order_cap`；遇到 `Permission denied` 时优先走 `tty=True` 的 root 执行路径。
 - 某些设备上，monkey 前的亮屏/解锁必须用朴素的 `input keyevent KEYCODE_WAKEUP`、`wm dismiss-keyguard`、`input swipe`；`cmd input keyboard ...` 这类写法可能不会真正把设备从 `Dozing` 拉到 `Awake`。
 - monkey runner 现在默认带 `--ignore-native-crashes`，避免某个 app 的 native crash 直接把整轮 workload 打断；只有显式传 `--abort-on-native-crash` 时才恢复 crash-stop 行为。
@@ -217,6 +266,9 @@ python3 scripts/run_memstress_and_collect_logs.py \
 
 - `scripts/run_monkey.py`：跑采样 + monkey（logcat + monkey stdout/stderr + dumpsys）
 - `scripts/run_memstress_and_collect_logs.py`：跑采样 + memstress（logcat + cycle log + dumpsys）
+- `scripts/preflight_thp_folio_caps.py`：记录并可选设置 THP/mTHP/f2fs/ext4 folio cap，检查 high-order stall 所需 tracepoint
+- `scripts/trace_highorder_stalls.py`：捕获 `mm_page_alloc` stack、direct reclaim、compaction，并按 reason/order/gfp 汇总 stall 次数和时长
+- `scripts/utils/alloc_reason.py`：共享高阶分配 stack 分类器（mTHP/page-cache/dma-heap/GPU/WiFi 等）
 - `scripts/run_refault_probe.py`：短跑 refault probe 编排器，串联 `memstress + trace_pipe + 20s drop_caches sidecar + 后台 summary`
 - `scripts/summarize_refault_probe.py`：读取 probe 输出目录，汇总 victim revisit / repeated `(mm,tgid,ino,pgoff)` / contention analyzer 摘要
 - `scripts/launch_memstress_detached.sh`：可靠后台启动 memstress（setsid + pidfile + stdout/stderr）
@@ -269,3 +321,32 @@ python3 scripts/watch_live_plot.py \
 - `references/memstress_strategy.md`：memstress 简化策略（`am start` + hold + HOME，不 force-stop）
 - `references/memstress_package_validation.md`：解释 memstress 为什么要校验/解析包名
 - `references/fleet_parallel.md`：解释单进程多设备并行与输出目录分层
+
+---
+
+## Workflow Contract
+
+### Main Workflow
+1. Preflight：运行 `scripts/preflight_thp_folio_caps.py`，记录 THP defrag、mTHP anon、f2fs/ext4 folio cap 和 tracepoint 可用性。
+2. Source confirmation：运行 `scripts/trace_page_alloc.py --min-order 2`，确认 workload 确实命中 mTHP、page-cache、网络/驱动/GPU 高阶分配 stack。
+3. Stall trace：运行 `scripts/trace_highorder_stalls.py --min-order 2`，捕获 direct reclaim 和 compaction begin/end，并按 reason/order/gfp 汇总。
+4. Fallback ratio：需要 mTHP 趋势时，同时或随后运行 `run_memstress_and_collect_logs.py` / `run_monkey.py` 采集 `raw_samples.csv`，用 `derived.csv` 计算 mTHP fallback ratio。
+5. Report / handoff：报告 `preflight.md`、source trace 命中情况、`stall_summary_by_reason_order.csv`、mTHP fallback ratio，并明确哪些失败率是现有 tracepoint 无法精确回答的。
+
+### Decision Table
+| Phase | Trigger / Symptom | Action | Verify | On Failure | Workflow Effect |
+|---|---|---|---|---|---|
+| Preflight | f2fs/ext4 folio cap 节点缺失 | 不假设 min/max 都可控；记录存在的节点和实际值 | `preflight.md` 列出 cap 节点 | 若目标必须 min=max=2，停止并说明缺失节点 | block / branch |
+| Preflight | tracepoint 缺失 | 只运行可用 tracepoint；缺失项写入报告 | `tracefs.required_events` | 缺 direct reclaim/compaction 时不能声明 stall 计数 | branch |
+| Source confirmation | `trace_page_alloc.py` 未命中目标 reason | 调整 workload（camera/douyin/memstress 包集、hold、interaction）后重跑 source trace | `analysis.txt` / `stacks.json` 有目标 stack | 仍未命中则不要进入归因长测 | block |
+| Stall trace | `stall_events.csv` reason 为 `unknown` 比例高 | 扩展 `scripts/utils/alloc_reason.py` 的 stack pattern，并保留 raw stack 样本 | 单元测试覆盖新增 pattern | 无法分类时按 unknown 报告，不强行归因 | continue |
+| Failure ratio | 需要 driver/network/GPU alloc failure ratio | 说明现有 tracepoint 只能看成功分配和 stall；改用 kretprobe/fprobe/eBPF 或 kernel instrumentation | entry/return 记录包含 NULL return | 设备不支持时只报告可观测上限 | branch |
+| Interpretation | 看到 `__GFP_COMP` | 不把它当作 stall 证据；检查 gfp 是否含 `__GFP_DIRECT_RECLAIM` 和 allocator slowpath trace | `stall_summary_by_reason_order.csv` 中有 direct reclaim/compaction | 无 stall event 则只报告 high-order allocation pressure | continue |
+
+### Output Contract
+- phase reached:
+- decision path taken:
+- verification evidence:
+- fallback used:
+- unresolved blocker:
+- next workflow step:
