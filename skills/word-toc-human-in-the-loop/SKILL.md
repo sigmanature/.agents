@@ -11,6 +11,8 @@ Use this workflow when the thesis source of truth is a `.docx` file and the TOC 
 
 The agent owns structure checks, `prepare`, `restyle`, and status reporting. The user owns the one step Linux tooling should not fake: opening the doc in Windows Word, updating the entire TOC, saving, and doing final visual judgment.
 
+Runtime note for this workspace: the workflow commands need a Python interpreter that already has `python-docx` installed. On this machine, `/home/nzzhao/miniconda3/bin/python` works, while the system `python3` may not.
+
 ## Bundled Assets
 
 This skill is now self-contained for migration:
@@ -26,6 +28,8 @@ This skill is now self-contained for migration:
   - `references/legacy/thesis_wordtoc_wrapper.py`
 
 Read `references/migration.md` when the user is moving this workflow to a new machine.
+
+If `python3` fails with `ModuleNotFoundError: No module named 'docx'`, rerun the workflow with the Miniconda base interpreter at `/home/nzzhao/miniconda3/bin/python` or another conda environment that provides `python-docx`.
 
 ## Current-Doc vs Template-Doc
 
@@ -78,6 +82,8 @@ Interpretation:
 - `is_dirty: True` means body headings and current TOC no longer match
 - `page_numbering_ok: False` means body page restart is not yet encoded
 - `摘要` / `ABSTRACT` are special TOC rows and should not be treated as dirty mismatches by themselves
+
+If `audit` raises `no TOC entries found`, treat the file as a manual-TOC or otherwise non-Word-TOC baseline and move to `prepare` on the correct source document instead of assuming the audit data is valid.
 
 ### 3. Prepare when the doc still uses a manual TOC
 

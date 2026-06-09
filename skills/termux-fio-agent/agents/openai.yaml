@@ -1,0 +1,3 @@
+interface:
+  display_name: "Termux FIO Agent"
+  short_description: "Operate Termux Android devices over ADB-forwarded SSH for fio testing."

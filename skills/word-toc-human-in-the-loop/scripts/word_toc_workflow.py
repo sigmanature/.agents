@@ -294,7 +294,10 @@ def extract_toc_template(docx_path: Path | str) -> TocTemplate:
     _, level1_para, level1_run = _level_sample(1)
     _, level2_para, level2_run = _level_sample(2)
     _, level3_para, level3_run = _level_sample(3)
-    dots_run = level3_para.runs[1]
+    dots_run = next(
+        (run for run in level3_para.runs[1:] if run.font.name or run.font.size),
+        level3_run,
+    )
 
     return TocTemplate(
         page_width_pt=section.page_width.pt,
@@ -512,7 +515,7 @@ def restyle_docx(input_docx: Path | str, template_docx: Path | str, output_docx:
     first_body_heading_index = _find_first_body_heading_index(doc, toc_title_index)
 
     _format_toc_title(doc.paragraphs[toc_title_index], template)
-    if toc_title_index + 1 < len(doc.paragraphs):
+    if toc_title_index + 1 < len(doc.paragraphs) and _parse_toc_line(doc.paragraphs[toc_title_index + 1].text) is None:
         _format_blank(doc.paragraphs[toc_title_index + 1])
 
     formatted_count = 0

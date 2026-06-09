@@ -30,6 +30,7 @@ from utils.adb_utils import adb_shell_cp, ensure_adb_works, resolve_serials
 from utils.crash_signature import TargetCrashSignatureDetector
 from utils.device_prep import ensure_awake_unlocked_and_stay_awake
 from utils.experiment_utils import ensure_out_dir, maybe_install_apks, run_setup_cmds
+from utils.interactive import interactive_click_loop
 from utils.oat_watch import DEFAULT_DELETE_EXTS, resolve_oat_watch_packages, watch_loop
 from utils.pkg_utils import read_package_file, unique_preserve_order
 from utils.sampling_utils import DEFAULT_COUNTERS, DEFAULT_STATS_DIR, run_derive_metrics, sample_loop, write_run_manifest
@@ -83,6 +84,9 @@ CONFIG = {
         "seed": 12345,
         "clear_logcat": True,
     },
+    "interactive": {
+        "mode": False,
+    },
     "sample_retries": 2,
     "sample_retry_sleep_s": 2,
 }
@@ -134,11 +138,9 @@ def start_activity(serial: str, component: str):
 
 
 def exit_to_home(serial: str):
-    # Prefer input keyevent (fast, doesn't depend on resolving HOME intent).
     cp = adb_shell_cp(serial, "input keyevent KEYCODE_HOME", timeout_s=10, check=False)
     if cp.returncode == 0:
         return cp
-    # Fallback: explicitly start HOME.
     return adb_shell_cp(serial, "am start -a android.intent.action.MAIN -c android.intent.category.HOME", timeout_s=20, check=False)
 
 
@@ -267,6 +269,7 @@ def launch_and_background(
     package: str,
     component: str,
     hold_ms: int,
+    interactive: bool = False,
     trace_label: Optional[str] = None,
 ) -> Dict:
     host_ts = time.time()
@@ -276,6 +279,7 @@ def launch_and_background(
         "host_ts": int(host_ts),
         "host_ts_sec": round(host_ts, 6),
         "hold_ms": int(hold_ms),
+        "interactive": interactive,
     }
     if trace_label:
         marker = f"memstress:{trace_label}:begin package={package} component={component}"
@@ -289,6 +293,10 @@ def launch_and_background(
     row["stderr_tail"] = (cp.stderr or "").strip()[-300:]
     row["ok"] = ok
     if ok:
+        if interactive:
+            time.sleep(0.6)
+            clicked = interactive_click_loop(serial)
+            row["interactive_clicked"] = clicked
         time.sleep(max(0, int(hold_ms) / 1000.0))
         home_cp = exit_to_home(serial)
         row["home_returncode"] = home_cp.returncode
@@ -413,6 +421,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     p.add_argument("--seed", type=int, default=CONFIG["memstress"]["seed"], help="Deterministic seed")
     p.add_argument(
+        "--mode",
+        choices=["launch_only", "interactive"],
+        default="launch_only",
+        help="launch_only: start+HOME only. interactive: also auto-click consent dialogs via uiautomator.",
+    )
+    p.add_argument(
         "--clear-logcat",
         action=argparse.BooleanOptionalAction,
         default=CONFIG["memstress"]["clear_logcat"],
@@ -482,6 +496,7 @@ def run_one_device(
     round_s = max(0, int(args.round_s))
     counters = [x.strip() for x in str(args.counters).split(",") if x.strip()]
     setup_cmds = CONFIG["setup_shell"] if args.setup_shell is None else list(args.setup_shell)
+    interactive = args.mode == "interactive"
 
     stats_dir = str(args.stats_dir)
     if stats_dir == DEFAULT_STATS_DIR:
@@ -552,6 +567,7 @@ def run_one_device(
                 "victim_revisit_hold_ms": int(args.victim_revisit_hold_ms),
                 "seed": int(args.seed),
                 "clear_logcat": bool(args.clear_logcat),
+                "mode": args.mode,
             },
             "oat_prune_watch": {
                 "enabled": bool(args.oat_prune_watch),
@@ -776,6 +792,7 @@ def run_one_device(
                     package=vp,
                     component=comp,
                     hold_ms=int(args.victim_prime_hold_ms),
+                    interactive=interactive,
                     trace_label="victim_prime",
                 )
                 victim_prime["event"] = "victim_prime"
@@ -831,6 +848,7 @@ def run_one_device(
                         package=pkg,
                         component=component,
                         hold_ms=int(args.hold_ms),
+                        interactive=interactive,
                     )
                     if launch_row["ok"]:
                         cycle_row["launched"].append(pkg)
@@ -870,6 +888,7 @@ def run_one_device(
                             package=vp,
                             component=comp,
                             hold_ms=int(args.victim_revisit_hold_ms),
+                            interactive=interactive,
                             trace_label="victim_revisit",
                         )
                         victim_revisit["event"] = "victim_revisit"

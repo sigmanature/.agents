@@ -28,6 +28,34 @@
       "pluginName": "agent-browser",
       "installedAt": "2026-04-01T11:34:56.074Z",
       "updatedAt": "2026-04-01T11:34:56.074Z"
+    },
+    "manus": {
+      "source": "sanjay3290/ai-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/sanjay3290/ai-skills.git",
+      "skillPath": "skills/manus/SKILL.md",
+      "skillFolderHash": "a08a3348cfe5b73aaccfd7668b0a8d0a5dd5ac27",
+      "pluginName": "ai-skills",
+      "installedAt": "2026-05-24T09:22:44.366Z",
+      "updatedAt": "2026-05-24T09:22:44.366Z"
+    },
+    "lark-doc": {
+      "source": "larksuite/cli",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/larksuite/cli.git",
+      "skillPath": "skills/lark-doc/SKILL.md",
+      "skillFolderHash": "309db0abb993bedf11c42adf792acbdae54d2bf7",
+      "installedAt": "2026-05-30T14:17:37.850Z",
+      "updatedAt": "2026-05-30T14:17:37.850Z"
+    },
+    "lark-shared": {
+      "source": "larksuite/cli",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/larksuite/cli.git",
+      "skillPath": "skills/lark-shared/SKILL.md",
+      "skillFolderHash": "ee067b6f692c0b12502d2d324496dbf964e0e62d",
+      "installedAt": "2026-05-30T14:25:43.712Z",
+      "updatedAt": "2026-05-30T14:25:43.712Z"
     }
   },
   "dismissed": {
