@@ -135,7 +135,7 @@ ssh termux-fio-2 'pwd; id; ls -la'
 Push a script:
 
 ```bash
-scp ./f2fs_fio_matrix.sh termux-fio-2:~/f2fs_fio_matrix.sh
+scp scripts/device/f2fs_fio_matrix.sh termux-fio-2:~/f2fs_fio_matrix.sh
 ssh termux-fio-2 'sed -i "s/\r$//" ~/f2fs_fio_matrix.sh'
 ```
 
@@ -148,7 +148,7 @@ ssh termux-fio-2 '
   SIZE=256M RUNTIME=10 REPEAT=1 TIME_BASED=0 COOLDOWN=1 bash ~/f2fs_fio_matrix.sh
   latest=$(ls -td ~/fio-f2fs-test/results-* | head -1)
   echo "$latest"
-  cat "$latest/median.tsv"
+  cat "$latest/median_iops.tsv"
 '
 ```
 
@@ -167,6 +167,31 @@ tar -xzf ./fio-results/termux-fio-2-last.tgz -C ./fio-results
 ```
 
 The helper `scripts/host/termux_fio_ops.sh` wraps these common operations.
+
+The bundled `scripts/device/f2fs_fio_matrix.sh` records and applies these F2FS runtime knobs when available:
+
+- `max_folio_order_cap`
+- `batch_read_pages_pending`
+- `skip_ffs_for_whole_bio`
+
+Treat `batch_read_pages_pending` and `skip_ffs_for_whole_bio` as separate matrix dimensions. Result paths, `summary.tsv`, and `median.tsv` should preserve both fields so host-side comparisons do not collapse distinct configurations.
+
+Before running any case under a new `max_folio_order_cap`, delete and recreate the test file. Do not reuse a file that was created under a previous folio-order setting. The bundled `scripts/device/f2fs_fio_matrix.sh` enforces this by removing the case file before `truncate` or prepare-write, and by deleting it again after the case finishes.
+
+Default matrix behavior:
+
+- If `ORDER`, `BATCH_READ`, and `SKIP_FFS` are all unset, one invocation runs these four profiles:
+  - `order=0,batch=-,skip=-`
+  - `order=2,batch=0,skip=0`
+  - `order=2,batch=1,skip=0`
+  - `order=2,batch=1,skip=1`
+- Each profile still keeps its own result directory under `profiles/`.
+- The top-level matrix directory also emits aggregate files with explicit config-labeled columns:
+  - `median_iops.tsv`
+  - `median_bw_MiB_s.tsv`
+  - `median_lat_mean_us.tsv`
+
+If you set any of `ORDER`, `BATCH_READ`, or `SKIP_FFS`, the script runs only that one explicit profile instead of the default four-profile sweep.
 
 ## SSH plus su rule
 
@@ -204,6 +229,7 @@ See `references/ssh-su-and-results.md` for details.
 - `scripts/host/registry.py`: maintain the device registry, allocate ports, generate SSH config, create ADB forwards.
 - `scripts/host/termux_fio_ops.sh`: check SSH, run commands, run fio, tar, and pull results.
 - `scripts/device/termux_bootstrap.sh`: human-run bootstrap script inside Termux.
+- `scripts/device/f2fs_fio_matrix.sh`: bundled fio matrix runner for Termux F2FS testing with `order`, `batch_read_pages_pending`, and `skip_ffs_for_whole_bio` captured in results.
 - `scripts/device/test_su.sh`: human-run or SSH-run root check script.
 - `references/state-registry.md`: registry schema and persistence rules.
 - `references/device-onboarding.md`: full onboarding decision tree.

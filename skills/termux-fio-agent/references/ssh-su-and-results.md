@@ -58,6 +58,24 @@ scp termux-fio-2:~/fio-last-result.tgz ./fio-results/termux-fio-2-last.tgz
 tar -xzf ./fio-results/termux-fio-2-last.tgz -C ./fio-results
 ```
 
+When using the bundled `f2fs_fio_matrix.sh`, preserve the runtime F2FS knobs in result metadata and filenames. At minimum, comparisons should keep these dimensions separate:
+
+- `order` from `max_folio_order_cap`
+- `batch_read` from `batch_read_pages_pending`
+- `skip_ffs` from `skip_ffs_for_whole_bio`
+
+Do not merge `batch_read=0` and `batch_read=1` runs into the same comparison bucket even if `skip_ffs` is unchanged.
+Do not reuse a test file across different `max_folio_order_cap` settings. Delete the old file first, then recreate or refill it under the target order, otherwise the file layout can carry state from the previous configuration and invalidate the comparison.
+
+For aggregate presentation, prefer explicit config labels over nicknames. Good column labels are:
+
+- `order=0,batch=-,skip=-`
+- `order=2,batch=0,skip=0`
+- `order=2,batch=1,skip=0`
+- `order=2,batch=1,skip=1`
+
+Avoid labels such as `baseline`, `Kim`, `batch`, or `full` in the final exported comparison table.
+
 ## Avoid adb shell for Termux private paths
 
 Do not rely on host `adb shell` to manipulate `/data/data/com.termux/files/home`. The ADB shell UID, Termux UID, SELinux context, and file ownership can differ. Use SSH/SCP into Termux instead.
