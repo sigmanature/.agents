@@ -36,7 +36,7 @@ def dalvik_cache_patterns_for_package(pkg: str, apk_path: str) -> List[str]:
 
 
 def _name_expr(exts: Sequence[str]) -> str:
-    parts = [f"-name {shlex.quote(f'*.{ext.lstrip('.')}')}" for ext in exts]
+    parts = ["-name " + shlex.quote("*." + ext.lstrip(".")) for ext in exts]
     return "\\( " + " -o ".join(parts) + " \\)"
 
 

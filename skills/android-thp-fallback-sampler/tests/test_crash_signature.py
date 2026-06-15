@@ -55,7 +55,26 @@ class CrashSignatureTests(unittest.TestCase):
         self.assertIsNotNone(payload)
         assert payload is not None
         self.assertEqual(payload["matched_package"], "com.tencent.mm")
-        self.assertEqual(payload["reason"], "target package am_crash + classloading error in proximity")
+        self.assertEqual(payload["reason"], "target package am_crash with classloading exception")
+
+
+    def test_ignores_target_npe_plus_unrelated_cnfe(self) -> None:
+        """The old false positive: target pkg has NPE, different process has CNFE."""
+        detector = TargetCrashSignatureDetector(
+            serial="SERIAL",
+            target_packages={"com.MobileTicket", "com.youku.phone"},
+            window_lines=500,
+        )
+
+        payload = _feed(
+            detector,
+            [
+                "06-14 09:24:02.276  1425  2525 I am_crash: [28566,0,com.MobileTicket,821575236,java.lang.NullPointerException,Attempt to invoke...,NULL,23,0]",
+                "06-14 09:24:03.575 25382 28967 E OneService: ClassNotFoundException: com.youku.hihonor.provider_impl.HiHonorWhiteBoxProviderImpl",
+            ],
+        )
+
+        self.assertIsNone(payload)
 
 
 if __name__ == "__main__":

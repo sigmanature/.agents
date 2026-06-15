@@ -5,62 +5,58 @@ import re
 import time
 from collections import deque
 from pathlib import Path
-from typing import Deque, Iterable, Optional
+from typing import Deque, Iterable, Optional, Tuple
 
 
 class TargetCrashSignatureDetector:
     """Detect target-package classloading crashes from logcat lines.
 
-    We intentionally ignore unrelated system/package crashes. For this workload,
-    the stop condition should only trip when a selected memstress target package
-    hits an `am_crash` near a classloading failure.
+    Only triggers when an am_crash event from a target package has a
+    ClassNotFoundException / NoClassDefFoundError / ClassNotFoundError as
+    its exception type. Cross-process proximity no longer counts.
     """
+
+    _AM_CRASH_RE = re.compile(
+        r"\bam_crash:\s*\["
+        r"[^,]+,"       # pid
+        r"[^,]+,"       # uid
+        r"([^,]+),"     # package (group 1)
+        r"[^,]+,"       # flags
+        r"([^,]+),"     # exception type (group 2)
+    )
+    _CNFE_TYPES = {"ClassNotFoundException", "NoClassDefFoundError", "ClassNotFoundError"}
 
     def __init__(self, *, serial: str, target_packages: Iterable[str], window_lines: int = 500) -> None:
         self.serial = serial
         self.target_packages = set(target_packages)
         self.window_lines = max(1, int(window_lines))
         self.context: Deque[str] = deque(maxlen=200)
-        self.cnfe_re = re.compile(r"(ClassNotFoundException|NoClassDefFoundError|ClassNotFoundError)")
-        self.am_crash_re = re.compile(r"\bam_crash:\s*\[[^,]+,[^,]+,([^,\]]+),")
-        self.win_target_am_crash = 0
-        self.last_target_package = ""
 
     def process_line(self, line: str) -> Optional[dict]:
         s = line.rstrip("\n")
         self.context.append(s)
 
-        saw_cnfe = self.cnfe_re.search(s) is not None
-        matched_pkg = self._extract_am_crash_package(s)
-        saw_target_am_crash = bool(matched_pkg and matched_pkg in self.target_packages)
+        pkg, exc_type = self._parse_am_crash(s)
+        if not pkg or pkg not in self.target_packages:
+            return None
+        if not any(t in exc_type for t in self._CNFE_TYPES):
+            return None
 
-        if saw_target_am_crash:
-            self.win_target_am_crash = self.window_lines
-            self.last_target_package = matched_pkg or ""
-
-        confirmed = (saw_target_am_crash and saw_cnfe) or (saw_cnfe and self.win_target_am_crash > 0)
-        payload = None
-        if confirmed:
-            payload = {
-                "serial": self.serial,
-                "host_ts": int(time.time()),
-                "reason": "target package am_crash + classloading error in proximity",
-                "window_lines": self.window_lines,
-                "matched_line": s,
-                "matched_package": matched_pkg or self.last_target_package,
-                "context_tail": list(self.context),
-            }
-
-        if self.win_target_am_crash > 0:
-            self.win_target_am_crash -= 1
-
-        return payload
+        return {
+            "serial": self.serial,
+            "host_ts": int(time.time()),
+            "reason": "target package am_crash with classloading exception",
+            "matched_line": s,
+            "matched_package": pkg,
+            "exception_type": exc_type,
+            "context_tail": list(self.context),
+        }
 
     def write_payload(self, path: Path, payload: dict) -> None:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    def _extract_am_crash_package(self, line: str) -> str:
-        m = self.am_crash_re.search(line)
+    def _parse_am_crash(self, line: str) -> Tuple[str, str]:
+        m = self._AM_CRASH_RE.search(line)
         if not m:
-            return ""
-        return m.group(1).strip()
+            return "", ""
+        return m.group(1).strip(), m.group(2).strip()

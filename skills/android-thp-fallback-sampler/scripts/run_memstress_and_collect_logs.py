@@ -432,6 +432,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=CONFIG["memstress"]["clear_logcat"],
         help="Clear logcat before starting workload/log collection",
     )
+    p.add_argument(
+        "--no-crash-detect",
+        action="store_true",
+        default=False,
+        help="Disable crash signature detection and skip logcat streaming entirely (reduces host IO)",
+    )
     p.add_argument("--victim-package", action="append", default=None, help="Victim package(s) to prime and revisit periodically outside the churn set (repeatable)")
     p.add_argument(
         "--victim-exclude-from-churn",
@@ -707,35 +713,37 @@ def run_one_device(
         sampler_thread.start()
 
         crash_signature_event = threading.Event()
-        crash_signature_path = memstress_out / "crash_signature.json"
-        crash_detector = TargetCrashSignatureDetector(
-            serial=serial,
-            target_packages=runnable_pkgs,
-            window_lines=500,
-        )
+        logcat = None
+        if not args.no_crash_detect:
+            crash_signature_path = memstress_out / "crash_signature.json"
+            crash_detector = TargetCrashSignatureDetector(
+                serial=serial,
+                target_packages=runnable_pkgs,
+                window_lines=500,
+            )
 
-        def _on_logcat_line(line: str) -> None:
-            if crash_signature_event.is_set():
-                return
+            def _on_logcat_line(line: str) -> None:
+                if crash_signature_event.is_set():
+                    return
 
-            payload = crash_detector.process_line(line)
-            if payload is not None:
-                try:
-                    crash_detector.write_payload(crash_signature_path, payload)
-                except Exception:
-                    pass
-                crash_signature_event.set()
-                stop_event.set()
+                payload = crash_detector.process_line(line)
+                if payload is not None:
+                    try:
+                        crash_detector.write_payload(crash_signature_path, payload)
+                    except Exception:
+                        pass
+                    crash_signature_event.set()
+                    stop_event.set()
 
-        from utils.adb_utils import start_logcat_stream
+            from utils.adb_utils import start_logcat_stream
 
-        logcat = start_logcat_stream(
-            serial,
-            memstress_out,
-            clear_logcat=bool(args.clear_logcat),
-            line_callback=_on_logcat_line,
-            stop_event=stop_event,
-        )
+            logcat = start_logcat_stream(
+                serial,
+                memstress_out,
+                clear_logcat=bool(args.clear_logcat),
+                line_callback=_on_logcat_line,
+                stop_event=stop_event,
+            )
         oat_watch_thread: Optional[threading.Thread] = None
         if bool(args.oat_prune_watch) and oat_watch_targets:
             oat_watch_thread = threading.Thread(
@@ -920,10 +928,11 @@ def run_one_device(
                 cycle_log_f.close()
             except Exception:
                 pass
-            try:
-                logcat.stop()
-            except Exception:
-                pass
+            if logcat is not None:
+                try:
+                    logcat.stop()
+                except Exception:
+                    pass
 
         # Stop this device's sampler thread (do NOT stop other devices).
         local_stop_event.set()
