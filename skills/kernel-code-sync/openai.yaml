@@ -1,0 +1,42 @@
+name: kernel-code-sync
+version: 1.0.0
+description: >
+  Sync modified kernel code files from a full kernel tree to a lightweight shadow repository.
+  Supports batch initialization, incremental sync, and auto-daemon mode.
+  
+  Use cases:
+  - Initialize a shadow repo from common_my_dec (excluding arch/drivers) with batch push
+  - Detect git-modified code files and sync them to the shadow repo
+  - Auto-daemon mode for periodic sync every N seconds
+  
+usage: |
+  # Initialize shadow repo (batch mode, excludes arch/drivers by default)
+  skill_mcp(tool_name="bash", command="bash ~/.agents/skills/kernel-code-sync/init.sh --remote https://github.com/user/repo.git")
+  
+  # Sync modified files manually
+  skill_mcp(tool_name="bash", command="bash ~/.agents/skills/kernel-code-sync/sync.sh --push")
+  
+  # Start auto-daemon
+  skill_mcp(tool_name="bash", command="bash ~/.agents/skills/kernel-code-sync/auto.sh --daemon --interval 300")
+  
+  # Check daemon status
+  skill_mcp(tool_name="bash", command="bash ~/.agents/skills/kernel-code-sync/auto.sh --status")
+  
+  # Stop daemon
+  skill_mcp(tool_name="bash", command="bash ~/.agents/skills/kernel-code-sync/auto.sh --stop")
+
+tools:
+  bash:
+    description: Execute the sync scripts
+    parameters:
+      command:
+        type: string
+        description: The script command to run
+      workdir:
+        type: string
+        description: Working directory (default: ~/learn_os/pixel)
+    required: [command]
+
+required_tools: [bash]
+author: Sisyphus
+homepage: https://github.com/sigmanature/common
