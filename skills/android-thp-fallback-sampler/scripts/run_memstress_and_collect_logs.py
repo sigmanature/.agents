@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Deque, Dict, List, Optional, Sequence, Set, Tuple
 
-from utils.adb_utils import adb_shell_cp, ensure_adb_works, resolve_serials
+from utils.adb_utils import adb_shell, adb_shell_cp, ensure_adb_works, resolve_serials
 from utils.crash_signature import TargetCrashSignatureDetector
 from utils.device_prep import ensure_awake_unlocked_and_stay_awake
 from utils.experiment_utils import ensure_out_dir, maybe_install_apks, run_setup_cmds
@@ -35,7 +35,9 @@ from utils.oat_watch import DEFAULT_DELETE_EXTS, resolve_oat_watch_packages, wat
 from utils.pkg_utils import read_package_file, unique_preserve_order
 from utils.sampling_utils import DEFAULT_COUNTERS, DEFAULT_STATS_DIR, run_derive_metrics, sample_loop, write_run_manifest
 from utils.thp_utils import ensure_thp_mode_for_stats
+from utils.buddyinfo_utils import buddyinfo_sample_loop, buddyinfo_with_thp_sample_loop
 from utils.task_pool import TaskPool
+from utils.vmstat_utils import derive_vmstat_csv, vmstat_sample_loop
 
 
 # === CONFIG (edit here) ===
@@ -89,6 +91,11 @@ CONFIG = {
     },
     "sample_retries": 2,
     "sample_retry_sleep_s": 2,
+    "buddyinfo_interval_s": 5,
+    "vmstat_interval_s": 60,
+    "readahead_min_order": None,
+    "ext4_folio_order": None,
+    "f2fs_max_folio_order": None,
 }
 
 
@@ -471,7 +478,57 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--sample-retries", type=int, default=CONFIG["sample_retries"], help="Sampling retries per tick")
     p.add_argument("--sample-retry-sleep-s", type=int, default=CONFIG["sample_retry_sleep_s"], help="Sleep seconds between sampling retries")
 
+    p.add_argument("--buddyinfo-interval-s", type=int, default=CONFIG["buddyinfo_interval_s"], help="Buddyinfo sampling interval (default 5s, set 0 to disable)")
+    p.add_argument("--buddyinfo-thp-counters", type=str, default="", help="Comma-separated THP counter names to append to each buddyinfo row (e.g. 'split,anon_fault_alloc')")
+    p.add_argument("--vmstat-interval-s", type=int, default=CONFIG["vmstat_interval_s"], help="Vmstat sampling interval (default 60s, set 0 to disable)")
+
+    p.add_argument("--readahead-min-order", type=int, default=CONFIG["readahead_min_order"], help="Write to /sys/kernel/mm/readahead/min_order before workload starts")
+    p.add_argument("--ext4-folio-order", type=int, default=CONFIG["ext4_folio_order"], help="Write to all ext4 min/max_folio_order_cap nodes before workload starts")
+    p.add_argument("--f2fs-max-folio-order", type=int, default=CONFIG["f2fs_max_folio_order"], help="Write to all f2fs max_folio_order_cap nodes before workload starts")
+
+    p.add_argument("--no-network-check", action="store_true", default=False, help="Skip network connectivity check before workload")
+
     return p.parse_args(argv)
+
+
+def _write_sysfs_if_exists(serial: str, path: str, value: str, *, use_su: bool, log_path: Path) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as f:
+        try:
+            out = adb_shell(serial, f"cat {path} 2>/dev/null", use_su=use_su, timeout_s=10, tty=use_su, check=False)
+            f.write(f"[write] {path} before={out.strip()}\n")
+        except Exception:
+            f.write(f"[write] {path} before=<unreadable>\n")
+        try:
+            adb_shell(serial, f"echo {value} > {path}", use_su=use_su, timeout_s=10, tty=use_su, check=True)
+            f.write(f"[write] {path} desired={value}\n")
+        except Exception as e:
+            f.write(f"[write] {path} ERROR: {e}\n")
+
+
+def _write_sysfs_glob(serial: str, glob_expr: str, value: str, *, use_su: bool, log_path: Path) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        out = adb_shell(serial, f"for p in {glob_expr}; do [ -e \"$p\" ] && echo \"$p\"; done",
+                        use_su=use_su, timeout_s=10, tty=use_su, check=False)
+        paths = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    except Exception:
+        paths = []
+    if not paths:
+        return
+    for path in paths:
+        _write_sysfs_if_exists(serial, path, value, use_su=use_su, log_path=log_path)
+
+
+def _ensure_network(serial: str) -> None:
+    import sys as _sys
+    while True:
+        cp = adb_shell_cp(serial, "ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1 && echo online || echo offline", timeout_s=10, check=False)
+        if cp.stdout and "online" in cp.stdout:
+            print(f"[{serial}] network OK")
+            return
+        print(f"[{serial}] 设备未联网，请连接 WiFi 后继续...", file=_sys.stderr)
+        time.sleep(5)
 
 
 def _auto_detect_stats_dir(serial: str, use_su: bool) -> str:
@@ -582,6 +639,12 @@ def run_one_device(
                 "poll_s": float(args.oat_prune_poll_s),
                 "exts": list(DEFAULT_DELETE_EXTS),
             },
+            "buddyinfo_interval_s": int(args.buddyinfo_interval_s),
+            "buddyinfo_thp_counters": [c.strip() for c in str(args.buddyinfo_thp_counters).split(",") if c.strip()] if args.buddyinfo_thp_counters else [],
+            "vmstat_interval_s": int(args.vmstat_interval_s),
+            "readahead_min_order": args.readahead_min_order,
+            "ext4_folio_order": args.ext4_folio_order,
+            "f2fs_max_folio_order": args.f2fs_max_folio_order,
         },
         "samples": 0,
         "sample_errors": 0,
@@ -599,6 +662,23 @@ def run_one_device(
         maybe_install_apks(scripts_dir=scripts_dir, apk_dir=args.apk_dir, serial=serial, out_dir=out_dir)
 
         run_setup_cmds(serial, setup_cmds, use_su=bool(args.use_su), log_path=out_dir / "setup_log.txt")
+
+        if args.readahead_min_order is not None:
+            _write_sysfs_if_exists(serial, "/sys/kernel/mm/readahead/min_order",
+                                   str(args.readahead_min_order), use_su=bool(args.use_su),
+                                   log_path=out_dir / "sysfs_write_log.txt")
+
+        if args.ext4_folio_order is not None:
+            val = str(args.ext4_folio_order)
+            for node in ("min_folio_order_cap", "max_folio_order_cap"):
+                _write_sysfs_glob(serial, f"/sys/fs/ext4/*/{node}", val,
+                                  use_su=bool(args.use_su),
+                                  log_path=out_dir / "sysfs_write_log.txt")
+
+        if args.f2fs_max_folio_order is not None:
+            _write_sysfs_glob(serial, "/sys/fs/f2fs/*/max_folio_order_cap",
+                              str(args.f2fs_max_folio_order), use_su=bool(args.use_su),
+                              log_path=out_dir / "sysfs_write_log.txt")
 
         if not args.no_thp_ensure:
             thp_result = ensure_thp_mode_for_stats(
@@ -620,6 +700,9 @@ def run_one_device(
                 retries=int(args.device_prepare_retries),
                 retry_sleep_s=int(args.device_prepare_retry_s),
             )
+
+        if not args.no_network_check:
+            _ensure_network(serial)
 
         valid_pkgs = validate_packages(serial, all_pkgs)
         if not valid_pkgs:
@@ -711,6 +794,55 @@ def run_one_device(
 
         sampler_thread = threading.Thread(target=_sampler, name=f"thp_sampler_{serial}", daemon=True)
         sampler_thread.start()
+
+        buddyinfo_thread = None
+        buddyinfo_thp_counters = [c.strip() for c in str(args.buddyinfo_thp_counters).split(",") if c.strip()] if args.buddyinfo_thp_counters else []
+        if int(args.buddyinfo_interval_s) > 0:
+            if buddyinfo_thp_counters:
+                buddyinfo_thread = threading.Thread(
+                    target=buddyinfo_with_thp_sample_loop,
+                    kwargs={
+                        "serial": serial,
+                        "out_csv": out_dir / "buddyinfo_samples.csv",
+                        "interval_s": int(args.buddyinfo_interval_s),
+                        "counters": buddyinfo_thp_counters,
+                        "stats_dir": stats_dir,
+                        "use_su": bool(args.use_su),
+                        "stop_event": stop,
+                    },
+                    name=f"buddyinfo_thp_{serial}",
+                    daemon=True,
+                )
+            else:
+                buddyinfo_thread = threading.Thread(
+                    target=buddyinfo_sample_loop,
+                    kwargs={
+                        "serial": serial,
+                        "out_csv": out_dir / "buddyinfo_samples.csv",
+                        "interval_s": int(args.buddyinfo_interval_s),
+                        "use_su": bool(args.use_su),
+                        "stop_event": stop,
+                    },
+                    name=f"buddyinfo_{serial}",
+                    daemon=True,
+                )
+            buddyinfo_thread.start()
+
+        vmstat_thread = None
+        if int(args.vmstat_interval_s) > 0:
+            vmstat_thread = threading.Thread(
+                target=vmstat_sample_loop,
+                kwargs={
+                    "serial": serial,
+                    "out_csv": out_dir / "vmstat_samples.csv",
+                    "interval_s": int(args.vmstat_interval_s),
+                    "use_su": bool(args.use_su),
+                    "stop_event": stop,
+                },
+                name=f"vmstat_{serial}",
+                daemon=True,
+            )
+            vmstat_thread.start()
 
         crash_signature_event = threading.Event()
         logcat = None
@@ -939,6 +1071,10 @@ def run_one_device(
         if oat_watch_thread is not None:
             oat_watch_thread.join(timeout=max(5.0, float(args.oat_prune_poll_s) * 2.0))
         sampler_thread.join(timeout=30)
+        if buddyinfo_thread is not None:
+            buddyinfo_thread.join(timeout=15)
+        if vmstat_thread is not None:
+            vmstat_thread.join(timeout=15)
         if sampling_result.exc:
             raise RuntimeError(f"sampling thread failed: {sampling_result.exc}")
 
@@ -947,6 +1083,10 @@ def run_one_device(
         write_run_manifest(out_dir / "run_manifest.json", manifest)
 
         run_derive_metrics(scripts_dir=scripts_dir, out_dir=out_dir)
+
+        vmstat_raw = out_dir / "vmstat_samples.csv"
+        if vmstat_raw.exists():
+            derive_vmstat_csv(vmstat_raw, out_dir / "vmstat_derived.csv")
 
         if crash_signature_event.is_set():
             manifest["status"] = "crash_signature_found"

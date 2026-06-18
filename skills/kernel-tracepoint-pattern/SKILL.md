@@ -1,3 +1,8 @@
+---
+name: kernel-tracepoint-pattern
+description: Use when adding or fixing Linux kernel ftrace tracepoints, especially TRACE_EVENT definitions, CREATE_TRACE_POINTS placement, caller includes, and common link or compile failures around trace event wiring.
+---
+
 # Kernel Tracepoint Pattern
 
 ## When To Use

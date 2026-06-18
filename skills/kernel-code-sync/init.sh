@@ -156,19 +156,9 @@ else
   echo "Initializing git repo: $dest_dir"
   mkdir -p "$dest_dir"
   git -C "$dest_dir" init -b "$branch" || die "git init failed"
-  cat > "$dest_dir/.gitignore" <<'GITIGNORE'
-*.o
-*.ko
-*.mod
-*.mod.c
-*.order
-*.symvers
-*.cmd
-*.tmp
-*~
-GITIGNORE
-  git -C "$dest_dir" add .gitignore
-  git -C "$dest_dir" commit -m "init: add .gitignore"
+   cp "$source_dir/.gitignore" "$dest_dir/.gitignore"
+   git -C "$dest_dir" add .gitignore
+   git -C "$dest_dir" commit -m "init: add .gitignore from $source_dir"
 fi
 
 if [ -n "$remote_url" ]; then

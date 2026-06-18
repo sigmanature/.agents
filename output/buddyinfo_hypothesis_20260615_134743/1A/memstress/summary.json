@@ -1,0 +1,14 @@
+{
+  "serial": "1A071FDF600053",
+  "cycles": 5,
+  "rounds": 1,
+  "launched_total": 16,
+  "runnable_packages": 97,
+  "heavy_packages": [
+    "com.qiyi.video",
+    "com.ss.android.article.video",
+    "com.videogo"
+  ],
+  "stopped_by_signal": false,
+  "crash_signature_found": false
+}

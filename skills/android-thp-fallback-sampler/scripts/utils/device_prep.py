@@ -40,6 +40,19 @@ def ensure_awake_unlocked_and_stay_awake(
     """
 
     log_path = out_dir / "device_prepare_log.txt"
+
+    try:
+        _ = adb_shell_retry(
+            serial,
+            "mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null || true",
+            use_su=True,
+            timeout_s=10,
+            retries=1,
+            retry_sleep_s=1,
+        )
+    except Exception:
+        pass
+
     cmds = [
         "input keyevent KEYCODE_WAKEUP || true",
         "wm dismiss-keyguard || true",

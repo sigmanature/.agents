@@ -1,0 +1,8 @@
+[1A071FDF600053] network OK
+[1A071FDF600053][memstress] cycle=1 launched=4 errors=0
+[1A071FDF600053][memstress] cycle=2 launched=4 errors=0
+[1A071FDF600053][memstress] cycle=3 launched=4 errors=0
+[1A071FDF600053][memstress] cycle=4 launched=4 errors=0
+[1A071FDF600053][memstress] cycle=5 launched=4 errors=0
+{"serial": "1A071FDF600053", "cycles": 5, "rounds": 1, "launched_total": 20, "runnable_packages": 97, "heavy_packages": ["com.qiyi.video", "com.ss.android.article.video", "com.videogo"], "stopped_by_signal": false, "crash_signature_found": false}
+[1A071FDF600053] out_dir=/home/nzzhao/.agents/skills/android-thp-fallback-sampler/scripts/../../../output/buddyinfo_hypothesis_20260615_163950/1A samples=1 errors=0

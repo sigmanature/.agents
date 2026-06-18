@@ -56,6 +56,15 @@
       "skillFolderHash": "ee067b6f692c0b12502d2d324496dbf964e0e62d",
       "installedAt": "2026-05-30T14:25:43.712Z",
       "updatedAt": "2026-05-30T14:25:43.712Z"
+    },
+    "markdown-to-docx": {
+      "source": "vace/markdown-docx",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/vace/markdown-docx.git",
+      "skillPath": "skills/markdown-to-docx/SKILL.md",
+      "skillFolderHash": "ff737d5f1533f1eaa44fdaf44ed3b43679398b22",
+      "installedAt": "2026-06-18T07:51:13.440Z",
+      "updatedAt": "2026-06-18T07:51:13.440Z"
     }
   },
   "dismissed": {

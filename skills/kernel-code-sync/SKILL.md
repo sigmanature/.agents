@@ -1,3 +1,8 @@
+---
+name: kernel-code-sync
+description: Use when syncing modified kernel code files from a full kernel tree to a lightweight shadow repository, including batch initialization, incremental sync, and auto-daemon workflows.
+---
+
 # kernel-code-sync
 
 同步完整内核树中的修改代码文件到轻量级影子仓库，支持分批初始化、增量同步和自动守护模式。
@@ -6,7 +11,8 @@
 
 1. **初始化影子仓库** — 从 `common_my_dec` 提取代码文件（排除 `arch/` 和 `drivers/`），分批推送到远程
 2. **增量同步** — 检测 `git status` 中的修改文件，只同步代码文件到影子仓库
-3. **自动守护** — 后台定时检测改动并自动推送
+3. **commit 级同步** — `--from REF` 抓取已提交的变更（用于 post-commit CI）
+4. **自动守护** — 后台定时检测改动并自动推送
 
 ## 快速开始
 
@@ -36,6 +42,12 @@ bash ~/.agents/skills/kernel-code-sync/sync.sh --pull --push
 
 # 只同步不推送（本地提交）
 bash ~/.agents/skills/kernel-code-sync/sync.sh
+
+# 同步最近一次 commit 的变更（无需未提交改动）
+bash ~/.agents/skills/kernel-code-sync/sync.sh --from HEAD~1 --push
+
+# 同步整个分支相对 main 的变更
+bash ~/.agents/skills/kernel-code-sync/sync.sh --from main --push --status
 ```
 
 ### 3. 自动守护模式
@@ -82,8 +94,9 @@ find "$source_dir" -type f -not -path "$source_dir/arch/*" -not -path "$source_d
 | `-d, --dest` | `common_kernel_code` | 影子仓库目录 |
 | `-r, --remote` | - | 远程仓库 URL |
 | `-b, --branch` | `main` | 分支名 |
-| `--push` | - | 提交并推送 |
-| `--pull` | - | 先拉取远程最新 |
+| `-f, --from` | - | 同步 `git diff REF..HEAD` 的变更（用于 post-commit CI） |
+| `--push` | - | 提交并推送（自动先 pull，避免冲突） |
+| `--pull` | - | 先拉取远程最新（`--push` 时自动执行） |
 | `--status` | - | 显示将被同步的文件 |
 | `--dry-run` | - | 同 `--status` |
 
@@ -102,10 +115,54 @@ find "$source_dir" -type f -not -path "$source_dir/arch/*" -not -path "$source_d
 
 ## 工作原理
 
-1. **文件检测**：`git status --porcelain` 获取 modified/untracked 文件
+1. **文件检测**：默认 `git status --porcelain`（未提交改动），`--from REF` 模式用 `git diff REF..HEAD --name-only`（已提交变更）
 2. **代码过滤**：只保留 `.c/.h/.S/.py/.sh/Makefile/Kconfig/BUILD.bazel/Android.bp` 等代码文件，排除构建产物和临时文件
 3. **树结构保持**：`cp --parents` 保持原始目录结构
 4. **分批提交**：大目录按 50MB 分批 `git commit` + `git push`，避免单次推送超限
+
+## CI：Post-Commit 自动同步
+
+在 `~/.repo/projects/common.git/hooks/post-commit` 中部署 hook，每次 `git commit` 后自动将刚提交的变更同步到影子仓库：
+
+```bash
+#!/usr/bin/env bash
+# Auto-sync committed code changes to common_kernel_code shadow repo.
+# Only fires from common_my_dec worktree.
+set -u -o pipefail
+
+worktree_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+
+case "$worktree_root" in
+  */common_my_dec|*/common_dec) ;;
+  *) exit 0 ;;
+esac
+
+sync_script="$HOME/.agents/skills/kernel-code-sync/sync.sh"
+log_file="${TMPDIR:-/tmp}/sync_kernel_code_post_commit.log"
+
+{
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] post-commit: syncing HEAD~1..."
+  cd "$HOME/learn_os/pixel" || exit 1
+  bash "$sync_script" --from HEAD~1 --push
+} >> "$log_file" 2>&1 &
+```
+
+查看同步日志：`tail -f /tmp/sync_kernel_code_post_commit.log`
+
+> **注意**：`--push` 会自动先执行 `--pull`。如果推送因冲突被拒，脚本会输出冲突信息并退出（不自动 merge/rebase），本地 commit 保留在影子仓库中等待手工处理。
+>
+> 冲突输出示例：
+> ```
+> ============================================
+>   PUSH REJECTED — manual intervention required
+> ============================================
+>   local  HEAD  : a1b2c3d
+>   remote main  : e4f5g6h
+>   To resolve:
+>     cd common_kernel_code
+>     git pull --rebase origin main   # integrate remote changes
+>     git push origin main             # retry after rebase
+> ```
 
 ## 文件过滤规则
 
@@ -138,12 +195,18 @@ git pull origin main
 
 ## 故障排查
 
-### 推送被拒
+### 推送被拒（多机器冲突）
+
+sync.sh 遇到 push 被拒时会打印冲突信息并退出，不会自动 rebase。本地 commit 已保留在影子仓库中：
+
 ```bash
-# 强制推送（覆盖远程历史）
 cd common_kernel_code
-git push origin main --force
+git pull --rebase origin main   # 整合远程变更
+# 检查冲突文件，手工解决
+git push origin main             # 重试推送
 ```
+
+> 不建议 `--force` push，除非你确定要丢弃远程的改动。
 
 ### 影子仓库已存在
 ```bash
