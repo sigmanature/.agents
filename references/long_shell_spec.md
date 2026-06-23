@@ -291,7 +291,84 @@ echo "[INFO] cleanup finished."
 
 ---
 
-## 9. 推荐启动封装函数
+## 9. `adb reboot` 场景下的脚本存活策略
+
+`adb reboot` 会导致 adb server 状态变化，即使使用 `setsid`，shell 仍可能收到 SIGHUP 被杀。
+
+**标准防御写法**（脚本顶部）：
+
+```bash
+#!/usr/bin/env bash
+# 必须：忽略 HANGUP，防止 adb reboot 或终端关闭导致脚本被杀
+trap '' SIGHUP
+# 建议也忽略 PIPE
+trap '' SIGPIPE
+```
+
+**原因**:
+
+```
+adb reboot
+  → 设备 USB 断开
+  → adb server 内部状态变化
+  → 可能向持有 adb 连接的 shell 发送 SIGHUP
+  → setsid 只改 sid/pgid，不屏蔽 SIGHUP
+  → 脚本被杀
+```
+
+单独 `setsid` 不够。必须 `setsid + trap '' SIGHUP` 组合。
+
+---
+
+## 10. `pkill -f` 禁止使用——必定自伤
+
+```bash
+# 危险：pkill -f 会匹配到自己的命令行
+pkill -f "run_memstress"   # ← 当前 bash 进程包含此字符串，自伤
+pkill -f "runner"          # ← 同上
+```
+
+**安全替代 A**：基于 PID 文件 kill（见规范第 8 节 cleanup）
+
+**安全替代 B**：`pgrep` + 排除自身 PID
+
+```bash
+pgrep -f "run_memstress" | grep -v "$$" | xargs -r kill 2>/dev/null
+```
+
+**安全替代 C**：用 `pgrep` 先列出，确认后再 `kill`
+
+```bash
+pids=$(pgrep -f "run_memstress" | grep -v "$$" | tr '\n' ' ')
+[ -n "$pids" ] && kill $pids 2>/dev/null
+```
+
+---
+
+## 11. 简化一次性强制清理
+
+编排脚本需要在启动前清理残留进程，不需要完整 cleanup 流程时：
+
+```bash
+kill_previous() {
+    local pattern="$1"
+    local pids
+    pids=$(pgrep -f "$pattern" 2>/dev/null | grep -v "$$" | tr '\n' ' ')
+    [ -z "$pids" ] && return 0
+    kill $pids 2>/dev/null || true
+    sleep 1
+    pids=$(pgrep -f "$pattern" 2>/dev/null | grep -v "$$" | tr '\n' ' ')
+    [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
+}
+
+kill_previous "run_memstress_and_collect_logs.py"
+```
+
+**注意**：`grep -v "$$"` 排除当前 shell 自身，防止 kill 自己导致命令阻塞。
+
+---
+
+## 12. 推荐启动封装函数
 
 建议在项目中提供统一启动函数，例如：
 
