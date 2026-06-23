@@ -337,11 +337,14 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
 
     rng = random.Random(seed)
     cycle_log_f = (memstress_out / "cycle_log.jsonl").open("w", encoding="utf-8")
+    cycle_start_ts: List[float] = []  # per-cycle wall-clock entry timestamps
 
     try:
         for cycle in range(1, max_cycles + 1):
             if stop_event.is_set():
                 break
+
+            cycle_start_ts.append(time.time())
 
             # shuf order for this cycle
             order = list(components)
@@ -374,6 +377,38 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
     finally:
         cycle_log_f.close()
         local_stop.set()
+
+    # --- cycle timing stats ---
+    if len(cycle_start_ts) >= 2:
+        deltas = [cycle_start_ts[i+1] - cycle_start_ts[i] for i in range(len(cycle_start_ts)-1)]
+        deltas_sorted = sorted(deltas)
+        n = len(deltas_sorted)
+        total_s = cycle_start_ts[-1] - cycle_start_ts[0]
+        timing = {
+            "total_cycles": len(cycle_start_ts),
+            "total_elapsed_s": round(total_s, 3),
+            "total_elapsed_ms": round(total_s * 1000, 1),
+            "max_cycle_s": round(max(deltas), 3),
+            "min_cycle_s": round(min(deltas), 3),
+            "mean_cycle_s": round(sum(deltas) / n, 3),
+            "median_cycle_s": round(deltas_sorted[n // 2], 3),
+            "p90_cycle_s": round(deltas_sorted[int(n * 0.90)], 3),
+            "p95_cycle_s": round(deltas_sorted[int(n * 0.95)], 3),
+            "unit": "seconds",
+            "note": "delta between consecutive cycle_start_ts (includes burst + json_write + cycle_sleep)",
+        }
+        (memstress_out / "cycle_timing.json").write_text(
+            json.dumps(timing, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        (memstress_out / "cycle_timing.md").write_text(
+            "\n".join([
+                "# cycle timing (per-cycle wall-clock)\n",
+                f"- cycles: {timing['total_cycles']}",
+                f"- total: {timing['total_elapsed_s']} s ({timing['total_elapsed_ms']} ms)",
+                f"- mean: {timing['mean_cycle_s']} s",
+                f"- max: {timing['max_cycle_s']} s",
+                f"- p90: {timing['p90_cycle_s']} s",
+                f"- p95: {timing['p95_cycle_s']} s",
+            ]) + "\n", encoding="utf-8")
 
     # --- post-run ---
     if logcat_handle:
