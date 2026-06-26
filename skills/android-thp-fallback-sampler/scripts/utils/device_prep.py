@@ -30,6 +30,7 @@ def ensure_awake_unlocked_and_stay_awake(
     *,
     retries: int,
     retry_sleep_s: int,
+    enable_tracing_on: bool = True,
 ) -> None:
     """Best-effort device prep for stable long-running workloads.
 
@@ -37,6 +38,8 @@ def ensure_awake_unlocked_and_stay_awake(
     - attempt to dismiss keyguard
     - set 'stay on' while plugged in
     - increase screen timeout
+    - set SELinux permissive (setenforce 0) so root sysfs writes succeed
+    - enable tracing_on if requested (no events are enabled, near-zero overhead)
     """
 
     log_path = out_dir / "device_prepare_log.txt"
@@ -65,6 +68,31 @@ def ensure_awake_unlocked_and_stay_awake(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as f:
+        for prep_cmd, label in (
+            ("setenforce 0 2>/dev/null || true", "setenforce 0"),
+            ("echo 1 > /sys/kernel/tracing/tracing_on 2>/dev/null || true", "enable tracing_on"),
+        ):
+            if label.startswith("enable tracing") and not enable_tracing_on:
+                continue
+            f.write(f"\n[{label}] {datetime.now().isoformat()}\n")
+            f.write(f"$ {prep_cmd}\n")
+            try:
+                out = adb_shell_retry(
+                    serial,
+                    prep_cmd,
+                    use_su=True,
+                    timeout_s=10,
+                    retries=1,
+                    retry_sleep_s=1,
+                    tty=True,
+                )
+                if out.strip():
+                    f.write(out)
+                    if not out.endswith("\n"):
+                        f.write("\n")
+            except Exception as e:
+                f.write(f"ERR: {e}\n")
+
         for attempt in range(1, max(1, retries) + 1):
             f.write(f"\n[{attempt}] {datetime.now().isoformat()}\n")
             for cmd in cmds:
