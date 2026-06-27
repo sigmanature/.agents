@@ -164,6 +164,32 @@ When the goal is static analysis, prefer:
 
 Do not substitute broad architecture summaries for the exact chain.
 
+## Output Code Preservation Rule
+
+When tracing a causal chain, every analysis point MUST:
+
+1. **Show the actual code line**, not just a prose paraphrase. After reading source code, the output must include the concrete `file:line` reference with the code snippet visible.
+2. **Preserve surrounding context** — include the minimal adjacent lines needed to understand control flow, variable initialization, error-path gating, and caller/callee relationship.
+3. **Never collapse code to prose alone** — "reads `x=y` at `foo.c:10`" is insufficient. The output must contain the actual line as it appears in the source.
+
+Good:
+```
+f2fs_write_end() at f2fs/file.c:220-231
+  → 220:  if (f2fs_is_atomic_file(inode))
+  → 221:      return f2fs_atomic_write_end(...)
+  → 227:  err = f2fs_write_end_io(inode, pos, len, copied, folio);
+  → 228:  if (err && err != -ENOSPC) {
+  → 229:      f2fs_err(sbi, "write_end_io failed err=%d", err);
+```
+Shows that atomic file fast-return at :220-221 bypasses the error path at :228-229.
+
+Bad:
+```
+f2fs_write_end has an early return for atomic files that skips error handling.
+```
+
+This prevents information loss when the reader needs to verify, extend, or cross-reference the analysis.
+
 ## Skill Output Style
 
 When answering the user:
@@ -171,6 +197,7 @@ When answering the user:
 - lead with rows whose statuses changed,
 - state the new status in the first sentence,
 - cite the exact file:line chain in the same paragraph,
+- include the actual code lines (not just line numbers) per Output Code Preservation Rule,
 - keep the matrix current in `.worklog`,
 - carry forward only unresolved rows.
 

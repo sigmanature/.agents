@@ -135,6 +135,17 @@ Correlation requirement:
 
 - identify the last N debug lines before first Oops/BUG,
 - map to function + decision branch + key state fields.
+
+**Code preservation rule**: When reporting findings that reference source code, always include the actual code lines with `file:line` references. Never collapse code analysis to prose summary alone — the reader must see the exact code that was read to form the conclusion. Example:
+
+```
+f2fs_submit_write_bio() at data.c:524
+  → 523:  if (f2fs_is_atomic_file(inode)) {
+  → 524:      __submit_merged_write_cond(sbi, inode, NULL, 0, DATA);
+  → 525:      return;  // <-- skips submit_bio below
+```
+
+This prevents information loss during handoff, compression, or verification.
 - when logs are table-friendly, query them as structured rows before doing free-form reading:
   - generic: `python3 /home/nzzhao/.agents/skills/kernel-log-instrumentor/scripts/kernel_log_kv_query.py <log> ...`
   - existing F2FS WBDBG/sysrq logs: `bash /home/nzzhao/.agents/skills/kernel-log-instrumentor/scripts/f2fs_log_field_query.sh <log> ...`

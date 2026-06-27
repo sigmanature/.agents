@@ -35,6 +35,68 @@ Chat (oc_xxx)
 
 ## Important Notes
 
+### Default Agent<->User File Handoff P2P
+
+This environment has a verified bot-accessible P2P chat that should be treated as the **default file handoff lane** between the agent and the user:
+
+- `chat_id`: `oc_0342e7185c23a67db703d32a42afcd68`
+- preferred identity: `--as bot`
+
+Use this lane by default when the user asks to:
+
+- send a file to the user via Feishu/Lark
+- fetch a file the user previously sent to the bot
+- inspect historical file attachments in the agent/user P2P conversation
+
+Unless the user explicitly overrides the target, prefer this chat over asking which recipient to use.
+
+#### Default send flow
+
+Send a local file to the default P2P chat:
+
+```bash
+lark-cli im +messages-send \
+  --as bot \
+  --chat-id oc_0342e7185c23a67db703d32a42afcd68 \
+  --file ./artifact.docx
+```
+
+Notes:
+
+- `+messages-send --file` accepts a cwd-relative local path, URL, or existing `file_key`.
+- Absolute paths are rejected by the shortcut. Run from the file's directory or copy/symlink the file into the current working directory first.
+- For images, prefer `--image`; for generic artifacts (`.docx`, `.pdf`, `.zip`, etc.), prefer `--file`.
+
+#### Default receive / pull-back flow
+
+List recent messages in the default P2P chat and look for `msg_type: "file"`:
+
+```bash
+lark-cli im +chat-messages-list \
+  --as bot \
+  --chat-id oc_0342e7185c23a67db703d32a42afcd68 \
+  --page-size 20 \
+  --no-reactions \
+  --format json
+```
+
+Then download by `message_id + file_key`:
+
+```bash
+lark-cli im +messages-resources-download \
+  --as bot \
+  --message-id om_xxx \
+  --file-key file_xxx \
+  --type file \
+  --output ./downloaded_artifact.bin
+```
+
+This flow has already been validated in this environment against historical files in the same P2P chat.
+
+For the detailed contract and examples, read:
+
+- [`references/lark-im-default-p2p-file-handoff.md`](references/lark-im-default-p2p-file-handoff.md)
+
 ### Identity and Token Mapping
 
 - `--as user` means **user identity** and uses `user_access_token`. Calls run as the authorized end user, so permissions depend on both the app scopes and that user's own access to the target chat/message/resource.
@@ -97,6 +159,7 @@ Shortcut 是对常用操作的高级封装（`lark-cli im +<verb> [flags]`）。
 | [`+chat-update`](references/lark-im-chat-update.md) | Update group chat name or description; user/bot; updates a chat's name or description |
 | [`+messages-mget`](references/lark-im-messages-mget.md) | Batch get messages by IDs; user/bot; fetches up to 50 om_ message IDs, formats sender names, expands thread replies |
 | [`+messages-reply`](references/lark-im-messages-reply.md) | Reply to a message (supports thread replies); user/bot; supports text/markdown/post/media replies, reply-in-thread, idempotency key |
+| `default P2P file handoff` | When the user asks to send or retrieve a file between the agent and the user, default to `--as bot --chat-id oc_0342e7185c23a67db703d32a42afcd68`; list history with `+chat-messages-list`, pull binaries with `+messages-resources-download`, send with `+messages-send --file/--image` |
 | [`+messages-resources-download`](references/lark-im-messages-resources-download.md) | Download images/files from a message; user/bot; supports automatic chunked download for large files (8MB chunks), auto-detects file extension from Content-Type |
 | [`+messages-search`](references/lark-im-messages-search.md) | Search messages across chats (supports keyword, sender, time range filters) with user identity; user-only; filters by chat/sender/attachment/time, supports auto-pagination via `--page-all` / `--page-limit`, enriches results via batched mget and chats batch_query |
 | [`+messages-send`](references/lark-im-messages-send.md) | Send a message to a chat or direct message; user/bot; sends to chat-id or user-id with text/markdown/post/media, supports idempotency key |

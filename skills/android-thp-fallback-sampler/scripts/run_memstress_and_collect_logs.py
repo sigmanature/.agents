@@ -224,9 +224,10 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
     ensure_awake_unlocked_and_stay_awake(serial, out_dir=out_dir, retries=3, retry_sleep_s=2)
 
     # --- THP ensure ---
-    ensure_thp_mode_for_stats(serial, stats_dir=stats_dir, desired_mode="always",
-                              use_su=use_su, retries=3, retry_sleep_s=2,
-                              log_path=out_dir / "thp_ensure_log.txt")
+    if not args.no_thp_ensure:
+        ensure_thp_mode_for_stats(serial, stats_dir=stats_dir, desired_mode="always",
+                                  use_su=use_su, retries=3, retry_sleep_s=2,
+                                  log_path=out_dir / "thp_ensure_log.txt")
 
     # --- package resolution ---
     valid_pkgs = validate_packages(serial, packages)
@@ -418,7 +419,8 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
 
     # derive metrics
     run_derive_metrics(scripts_dir=Path(__file__).resolve().parent, out_dir=out_dir)
-    derive_vmstat_csv(out_dir / "vmstat_samples.csv", out_dir)
+    derive_vmstat_csv(out_dir / "vmstat_samples.csv",
+                      out_dir / "vmstat_derived.csv")
 
     manifest["status"] = "finished"
     manifest["end_host_ts"] = int(time.time())
@@ -453,6 +455,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                    action=argparse.BooleanOptionalAction, default=CONFIG["memstress"]["clear_logcat"])
     p.add_argument("--no-network-check", action="store_true", help="Skip network connectivity check")
     p.add_argument("--no-crash-detect", action="store_true", help="Disable crash detection and logcat streaming")
+    p.add_argument("--no-thp-ensure", action="store_true", help="Skip THP enabled ensure check/write")
     p.add_argument("--buddyinfo-interval-s", type=int, default=CONFIG["buddyinfo_interval_s"])
     p.add_argument("--vmstat-interval-s", type=int, default=CONFIG["vmstat_interval_s"])
     p.add_argument("--from-manifest", default=None, help="Load all params from a previous run_manifest.json")
