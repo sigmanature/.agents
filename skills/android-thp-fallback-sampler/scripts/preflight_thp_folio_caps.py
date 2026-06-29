@@ -53,6 +53,17 @@ def write_path(serial: str, path: str, value: str, *, use_su: bool = True) -> Di
     return result
 
 
+def write_folio_caps_bulk(serial: str, value: str, *, use_su: bool = True) -> None:
+    value_q = shlex.quote(value)
+    cmd = (
+        "for d in /sys/fs/ext4 /sys/fs/f2fs; do "
+        f"for f in $d/*/max_folio_order_cap $d/*/min_folio_order_cap; do "
+        f"[ -w \"$f\" ] && echo {value_q} > \"$f\" 2>/dev/null; "
+        "done; done"
+    )
+    shell(serial, cmd, use_su=use_su, check=False)
+
+
 def list_dirs(serial: str, glob_expr: str, *, use_su: bool = True) -> List[str]:
     out = shell(serial, f"for p in {glob_expr}; do [ -e \"$p\" ] && echo \"$p\"; done", use_su=use_su, check=False)
     return [line.strip() for line in out.splitlines() if line.strip()]
@@ -101,9 +112,8 @@ def collect(serial: str, args: argparse.Namespace) -> Dict[str, object]:
     fs_paths.extend(list_dirs(serial, "/sys/fs/ext4/*/min_folio_order_cap", use_su=args.use_su))
 
     if args.folio_cap is not None:
-        for p in fs_paths:
-            if p.endswith("/max_folio_order_cap") or p.endswith("/min_folio_order_cap"):
-                report["actions"].append(write_path(serial, p, str(args.folio_cap), use_su=args.use_su))
+        write_folio_caps_bulk(serial, str(args.folio_cap), use_su=args.use_su)
+        report["actions"].append({"bulk_folio_cap": str(args.folio_cap), "returncode": 0})
 
     report["filesystem_folio_caps"] = {p: read_path(serial, p, use_su=args.use_su) for p in sorted(set(fs_paths))}
 

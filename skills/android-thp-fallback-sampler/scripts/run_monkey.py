@@ -62,6 +62,7 @@ CONFIG = {
         "extra_flags": "--ignore-native-crashes --ignore-crashes --ignore-timeouts --ignore-security-exceptions",
         "clear_logcat": True,
         "device_prepare": True,
+        "enable_tracing_on": True,
         "device_prepare_retries": 3,
         "device_prepare_retry_s": 2,
     },
@@ -219,6 +220,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=CONFIG["monkey"]["device_prepare"],
         help="Try to wake/unlock + keep screen on before starting workload",
     )
+    p.add_argument(
+        "--enable-tracing-on",
+        action=argparse.BooleanOptionalAction,
+        default=CONFIG["monkey"]["enable_tracing_on"],
+        help="During device prepare, write 1 to /sys/kernel/tracing/tracing_on (default: on). No events are enabled, so overhead is near zero.",
+    )
     p.add_argument("--device-prepare-retries", type=int, default=CONFIG["monkey"]["device_prepare_retries"])
     p.add_argument("--device-prepare-retry-s", type=int, default=CONFIG["monkey"]["device_prepare_retry_s"])
 
@@ -285,6 +292,7 @@ def run_one_device(
                 "extra_flags": args.monkey_extra,
                 "clear_logcat": bool(args.clear_logcat),
                 "device_prepare": bool(args.device_prepare),
+                "enable_tracing_on": bool(args.enable_tracing_on),
             },
         },
         "samples": 0,
@@ -320,6 +328,7 @@ def run_one_device(
                 out_dir=out_dir / "monkey",
                 retries=int(args.device_prepare_retries),
                 retry_sleep_s=int(args.device_prepare_retry_s),
+                enable_tracing_on=bool(args.enable_tracing_on),
             )
 
         manifest["status"] = "running"

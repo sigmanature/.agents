@@ -46,6 +46,11 @@ CONFIG = {
     "stats_dir": DEFAULT_STATS_DIR,
     "counters": list(DEFAULT_COUNTERS),
     "use_su": True,
+    "no_network_check": True,
+    "device_prepare": {
+        "enabled": True,
+        "enable_tracing_on": True,
+    },
     "memstress": {
         "burst_size": 1,
         "hold_ms": 200,
@@ -173,6 +178,9 @@ def load_manifest_args(manifest_path: str) -> dict:
         "stats_dir": cfg.get("stats_dir", CONFIG["stats_dir"]),
         "counters": ",".join(cfg.get("counters", CONFIG["counters"])),
         "use_su": cfg.get("use_su", CONFIG["use_su"]),
+        "no_network_check": cfg.get("no_network_check", CONFIG["no_network_check"]),
+        "device_prepare": cfg.get("device_prepare", CONFIG["device_prepare"]["enabled"]),
+        "enable_tracing_on": cfg.get("enable_tracing_on", CONFIG["device_prepare"]["enable_tracing_on"]),
         "hold_ms": ms.get("hold_ms", CONFIG["memstress"]["hold_ms"]),
         "launch_gap_ms": ms.get("launch_gap_ms", CONFIG["memstress"]["launch_gap_ms"]),
         "cycle_sleep_ms": ms.get("cycle_sleep_ms", CONFIG["memstress"]["cycle_sleep_ms"]),
@@ -205,12 +213,15 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
         "status": "running",
         "config": {"stats_dir": stats_dir, "counters": counters,
                    "interval_s": interval_s, "use_su": use_su,
+                   "no_network_check": bool(args.no_network_check),
                    "max_cycles": int(args.max_cycles),
+                   "device_prepare": bool(args.device_prepare),
+                   "enable_tracing_on": bool(args.enable_tracing_on),
                    "memstress": {"packages": packages, "burst_size": int(args.burst_size),
-                                 "hold_ms": int(args.hold_ms), "launch_gap_ms": int(args.launch_gap_ms),
-                                 "cycle_sleep_ms": int(args.cycle_sleep_ms),
-                                 "seed": int(args.seed), "mode": str(args.mode),
-                                 "clear_logcat": bool(args.clear_logcat)},
+                                  "hold_ms": int(args.hold_ms), "launch_gap_ms": int(args.launch_gap_ms),
+                                  "cycle_sleep_ms": int(args.cycle_sleep_ms),
+                                  "seed": int(args.seed), "mode": str(args.mode),
+                                  "clear_logcat": bool(args.clear_logcat)},
                    "buddyinfo_interval_s": int(args.buddyinfo_interval_s),
                    "vmstat_interval_s": int(args.vmstat_interval_s)},
     }
@@ -221,7 +232,14 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
         ensure_network(serial)
 
     # --- device prepare ---
-    ensure_awake_unlocked_and_stay_awake(serial, out_dir=out_dir, retries=3, retry_sleep_s=2)
+    if args.device_prepare:
+        ensure_awake_unlocked_and_stay_awake(
+            serial,
+            out_dir=out_dir,
+            retries=3,
+            retry_sleep_s=2,
+            enable_tracing_on=bool(args.enable_tracing_on),
+        )
 
     # --- THP ensure ---
     if not args.no_thp_ensure:
@@ -395,6 +413,7 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
             "median_cycle_s": round(deltas_sorted[n // 2], 3),
             "p90_cycle_s": round(deltas_sorted[int(n * 0.90)], 3),
             "p95_cycle_s": round(deltas_sorted[int(n * 0.95)], 3),
+            "deltas_s": [round(x, 3) for x in deltas],
             "unit": "seconds",
             "note": "delta between consecutive cycle_start_ts (includes burst + json_write + cycle_sleep)",
         }
@@ -419,8 +438,9 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
 
     # derive metrics
     run_derive_metrics(scripts_dir=Path(__file__).resolve().parent, out_dir=out_dir)
-    derive_vmstat_csv(out_dir / "vmstat_samples.csv",
-                      out_dir / "vmstat_derived.csv")
+    vmstat_samples = out_dir / "vmstat_samples.csv"
+    if vmstat_samples.exists():
+        derive_vmstat_csv(vmstat_samples, out_dir / "vmstat_derived.csv")
 
     manifest["status"] = "finished"
     manifest["end_host_ts"] = int(time.time())
@@ -453,11 +473,24 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--mode", choices=["launch_only", "interactive"], default=CONFIG["memstress"]["mode"])
     p.add_argument("--clear-logcat", "--no-clear-logcat", dest="clear_logcat",
                    action=argparse.BooleanOptionalAction, default=CONFIG["memstress"]["clear_logcat"])
-    p.add_argument("--no-network-check", action="store_true", help="Skip network connectivity check")
+    p.add_argument("--no-network-check", action="store_true", default=CONFIG["no_network_check"],
+                   help="Skip network connectivity check (default: skip)")
     p.add_argument("--no-crash-detect", action="store_true", help="Disable crash detection and logcat streaming")
     p.add_argument("--no-thp-ensure", action="store_true", help="Skip THP enabled ensure check/write")
     p.add_argument("--buddyinfo-interval-s", type=int, default=CONFIG["buddyinfo_interval_s"])
     p.add_argument("--vmstat-interval-s", type=int, default=CONFIG["vmstat_interval_s"])
+    p.add_argument(
+        "--device-prepare",
+        action=argparse.BooleanOptionalAction,
+        default=CONFIG["device_prepare"]["enabled"],
+        help="Wake/unlock/keep screen on before workload (default: on)",
+    )
+    p.add_argument(
+        "--enable-tracing-on",
+        action=argparse.BooleanOptionalAction,
+        default=CONFIG["device_prepare"]["enable_tracing_on"],
+        help="During device prepare, write 1 to /sys/kernel/tracing/tracing_on (default: on). No events are enabled, so overhead is near zero.",
+    )
     p.add_argument("--from-manifest", default=None, help="Load all params from a previous run_manifest.json")
 
     args = p.parse_args(argv)

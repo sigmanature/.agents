@@ -32,6 +32,18 @@ Do not include:
 - full trial-and-error history
 - long raw logs
 - exhaustive debugging chronology
+- internal correction language such as "不再使用", "不是而是", "不能再看", or "口径已经修正"; write the final external-facing conclusion directly
+- repeated-test/process wording such as "复测", "baseline", "smoke", or "50 轮专项" unless the audience specifically needs experiment provenance
+- raw counter or tracepoint enum names in main tables when a short human-readable cause explains the same signal
+- agent-internal analysis labels such as "叶子栈", "strict", or "no coarse"; use audience-facing terms such as "调用栈分布" and "按子原因统计"
+
+## Presentation rules for technical reports
+
+- Treat charts and tables as decision aids: emphasize the dominant 1-3 causes in bold and keep secondary rows compact.
+- When showing cause ratios, make the denominator explicit in plain language, for example "在 VMA 边界失败样本内占比".
+- Use code snippets only at mechanism pivots where the reader must understand why the data means what it means.
+- If a sampled trace distribution is paired with an absolute counter, state that once near the first chart and avoid repeating tooling caveats.
+- Prefer direct mechanism wording over debug counter names; for example use "VMA 边界不覆盖完整 16KB folio" instead of internal reason identifiers.
 
 ## Suggested phrasing
 

@@ -98,6 +98,8 @@ Any .c file that calls `trace_my_event_name(...)` must include:
 | Missing declaration include | `trace_xxx` undefined | Add `#include <trace/events/xxx.h>` to caller |
 | F2fs types in mm trace header | `nid_t` unknown when compiled from mm/ | Use only generic types in cross-subsystem headers |
 | CREATE_TRACE_POINTS before header includes types | Missing kernel types | Define CREATE_TRACE_POINTS after all kernel includes |
+| Defining enums inside trace event header | `redefinition of 'xxx'` because trace headers are included twice | Prefer integer `#define` constants + `__print_symbolic` directly in the trace header; if you must use enum, guard it with `#ifndef __XXX_DECLARE_TRACE_ENUMS_ONCE_ONLY` (see `include/trace/events/afs.h`) or define it in a lightweight kernel header |
+| Including heavy kernel headers (e.g. `<linux/mm.h>`) in trace event header | Boot/runtime failures or circular include issues | Keep trace headers minimal; use integer constants or forward declarations instead of pulling in heavy headers |
 
 ## Reference: mmap_lock
 

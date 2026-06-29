@@ -5,6 +5,20 @@ description: automate long-running sampling of android anon 16KB large folio fal
 
 # Android THP 16KB Anon Fallback Sampler
 
+> **模型默认启动配置**: `/home/nzzhao/runs/thp_memstress_120cycles_20260625/run_manifest.json`
+> **技能默认模板**: `config/default_memstress_manifest.json`（可复制修改后作为单次运行输入）
+
+## 最短理解路径（Agent 必看）
+
+如果你是第一次使用本 skill，按下面顺序理解，不要跳过：
+
+1. 先读 `config/default_memstress_manifest.json`：它描述了一次标准 memstress + THP 16KB stats 采样的**全部默认参数**（包列表、counters、间隔、`no_network_check` 默认跳过网络检查、memstress 启停节奏）。
+2. 再读本文件下面的 **快速开始 → 3) 跑“采样 + memstress”长测**，把模板里的参数对应到命令行。
+3. 启动脚本时一定要先阅读references/long_shell_spec.md
+4. 需要对比不同开关或 fleet 多设备时，再看 **Workflow Contract** 和 **常见坑 / 稳定性建议**。
+
+本 skill 所有 workload 的默认配置都逐步收敛到 `config/` 目录下的 manifest 模板；新增 workload 默认配置时也优先放在这里，并在本文件顶部引用。
+
 用来**稳定跑手机端长时间测试**：同时利用
 - monkey + adb 压力/切换 workload android-adb-workflows skill
 - memstress 启停循环 workload（快速启动多 app、保活一批、再 force-stop 一批）
@@ -39,6 +53,8 @@ description: automate long-running sampling of android anon 16KB large folio fal
 adb devices
 # 确认设备是 device 状态
 ```
+
+**本 skill 默认目标设备已 root 并可用 `su`。** 所有需要 root 的操作（读/写 sysfs、设置 SELinux、点亮屏幕等）都通过 `adb shell "su -c '...'"` 执行，agent 侧不做 root 可用性校验。如果设备没有 su，脚本会在对应日志里记录错误但不会中断整个流程（`setenforce 0`、`tracing_on` 等步骤均为 best-effort）。
 
 如果本轮目标是观测高阶分配是否触发 direct reclaim / sync compaction，先固定并记录 THP 与文件系统 folio cap 状态：
 
@@ -96,6 +112,8 @@ python3 scripts/run_monkey.py \
 ### 3) 跑“采样 + memstress”长测
 
 适用于更强调**快速切换/冷启动 churn** 的场景：每轮快速启动多 app，每次启动后 hold 一小段时间，然后按 HOME 返回桌面（不 force-stop，不做 LRU）。
+
+默认参数模板见 `config/default_memstress_manifest.json`。
 
 ```bash
 python3 scripts/run_memstress_and_collect_logs.py \
@@ -165,6 +183,10 @@ python3 scripts/trace_highorder_stalls.py \
 - `--interval-s <sec>`：采样间隔（默认 60s）
 - `--stats-dir <path>`：stats 目录（默认 16KB stats）
 - `--use-su/--no-use-su`：是否用 `su -c` 读 stats / 执行 setup（需要 root）
+- `--device-prepare/--no-device-prepare`：是否执行设备准备（唤醒、解锁、常亮、默认 `setenforce 0`、写 `tracing_on`）
+- `--enable-tracing-on/--no-enable-tracing-on`：设备准备阶段是否写 `1` 到 `/sys/kernel/tracing/tracing_on`（默认开启；本 skill 不会启用任何具体 tracer/event，开销接近零）
+- `--device-prepare-retries <n>`：唤醒重试次数
+- `--device-prepare-retry-s <n>`：唤醒重试间隔
 - `--setup-shell <cmd>`：可重复，运行前执行（建议把开关设置放这）
 - `--apk-dir <dir>`：先批量安装该目录下的 `*.apk`
 - `--thp-ensure-mode <mode>`：通过 `<stats_dir_parent>/enabled` 确保模式（如 `always`；用 `none` 表示只检查不写）
@@ -181,7 +203,10 @@ python3 scripts/trace_highorder_stalls.py \
 - `--duration-s <sec>`：总时长（默认 6h）
 - `--interval-s <sec>`：采样间隔（默认 60s）
 - `--stats-dir <path>` / `--counters <csv>`：采样源与 counter 列表
-- `--use-su/--no-use-su`：是否用 `su -c` 读 stats / 执行 setup（需要 root）
+- `--use-su`：使用 `su -c` 读 stats / 执行 root 操作（默认开启；本 skill 假设设备有 su）
+- `--no-network-check`：跳过 `ping 8.8.8.8` 联网检查（默认开启，即默认不检查网络）
+- `--device-prepare/--no-device-prepare`：是否执行设备准备（唤醒、解锁、常亮、默认 `setenforce 0`、写 `tracing_on`）
+- `--enable-tracing-on/--no-enable-tracing-on`：设备准备阶段是否写 `1` 到 `/sys/kernel/tracing/tracing_on`（默认开启；本 skill 不会启用任何具体 tracer/event，开销接近零）
 - `--setup-shell <cmd>`：可重复，运行前执行（建议把开关设置放这）
 - `--thp-ensure-mode <mode>` / `--no-thp-ensure`：同上
 - `--package <pkg>` / `--package-file <file>`：memstress 的目标 app 集合
@@ -264,6 +289,8 @@ python3 scripts/run_memstress_and_collect_logs.py \
 
 ## Bundled resources
 
+- `config/default_memstress_manifest.json`：默认 memstress 采样配置模板（Agent 最短理解路径入口）
+- `config/README.md`：config 目录说明与模板扩展规则
 - `scripts/run_monkey.py`：跑采样 + monkey（logcat + monkey stdout/stderr + dumpsys）
 - `scripts/run_memstress_and_collect_logs.py`：跑采样 + memstress（logcat + cycle log + dumpsys）
 - `scripts/preflight_thp_folio_caps.py`：记录并可选设置 THP/mTHP/f2fs/ext4 folio cap，检查 high-order stall 所需 tracepoint

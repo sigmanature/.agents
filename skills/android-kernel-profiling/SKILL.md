@@ -41,6 +41,7 @@ Use `simpleperf` as the default answer for Android kernel CPU profiling. Use `Pe
    - For `binary_cache_builder.py`, `vmlinux`, `.ko`, source code, and disassembly: `references/simpleperf-symbolization.md`
    - For command recipes and pitfalls: `references/recipes.md`
    - For oat/vdex write+rename syscall capture: `references/oat-vdex-syscall-capture.md`
+   - **For Perfetto ftrace config on Pixel (Magisk root)**: `references/perfetto-ftrace-config.md` — covers `--txt --background`, kprobes, event_filter workaround, `/data/misc/perfetto-configs/` placement, verified mTHP tracepoint manifest.
 
 ## Answer style
 
