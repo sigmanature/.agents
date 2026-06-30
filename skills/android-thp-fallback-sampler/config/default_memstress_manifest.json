@@ -127,7 +127,7 @@
       "hold_ms": 15,
       "launch_gap_ms": 15,
       "cycle_sleep_ms": 1000,
-      "seed": 12345,
+      "seed": 20260617,
       "mode": "launch_only",
       "clear_logcat": true
     },

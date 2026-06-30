@@ -20,6 +20,12 @@ VMSTAT_KEYS = [
     "pgscan_direct_throttle",
     "compact_stall",
     "compact_success",
+    "compact_daemon_wake",
+    "compact_daemon_migrate_scanned",
+    "compact_daemon_free_scanned",
+    "compact_daemon_order2_created",
+    "alloc_success_order0",
+    "alloc_success_order2",
     "pageoutrun",
     "kswapd_inodesteal",
 ]
