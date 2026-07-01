@@ -28,6 +28,10 @@ VMSTAT_KEYS = [
     "alloc_success_order2",
     "alloc_fail_wmark",
     "alloc_fail_fragment",
+    "kcompactd_timeout_wake",
+    "kcompactd_order2_low",
+    "kcompactd_wake_from_vmscan",
+    "kcompactd_wake_from_alloc",
     "pageoutrun",
     "kswapd_inodesteal",
 ]

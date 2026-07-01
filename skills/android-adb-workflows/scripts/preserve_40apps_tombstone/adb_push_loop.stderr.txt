@@ -1,0 +1,1 @@
+./preserve_40apps_tombstone/device_loop.sh: 1 file pushed, 0 skipped. 17.5 MB/s (3357 bytes in 0.000s)

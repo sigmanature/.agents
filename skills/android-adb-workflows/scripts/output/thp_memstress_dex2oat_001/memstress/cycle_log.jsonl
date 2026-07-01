@@ -1,0 +1,6 @@
+{"cycle": 1, "launched": ["com.baidu.searchbox.lite/com.baidu.searchbox.SplashActivity"], "errors": [], "ts": "2026-07-01 22:14:32"}
+{"cycle": 2, "launched": ["com.tencent.KiHan/com.itop.gcloud.msdk.core.policy.MSDKPolicyActivity"], "errors": [], "ts": "2026-07-01 22:14:34"}
+{"cycle": 3, "launched": ["com.kmxs.reader/com.km.app.home.view.LoadingActivity"], "errors": [], "ts": "2026-07-01 22:14:35"}
+{"cycle": 4, "launched": ["com.sdu.didi.psnger/com.didi.sdk.app.launch.splash.SplashActivity"], "errors": [], "ts": "2026-07-01 22:14:37"}
+{"cycle": 5, "launched": ["com.shizhuang.duapp/.modules.home.ui.SplashActivity"], "errors": [], "ts": "2026-07-01 22:14:38"}
+{"cycle": 6, "launched": ["com.baidu.searchbox/.SplashActivity"], "errors": [], "ts": "2026-07-01 22:14:41"}

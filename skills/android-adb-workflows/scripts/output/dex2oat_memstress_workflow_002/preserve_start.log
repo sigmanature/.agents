@@ -1,0 +1,7 @@
+Started device-side watcher and host-side tombstone watcher in background.
+  device_dir: /data/local/tmp/preserve_18281FDF6007HB_20260701_221923_3679090_559395844
+  device_pid: 9856
+  watcher_pid: 3679123
+  host_out:   ./output/dex2oat_memstress_workflow_002/preserve
+  stop:       adb -s 18281FDF6007HB shell "su -c 'cat /data/local/tmp/preserve_18281FDF6007HB_20260701_221923_3679090_559395844/pid | xargs -r kill'"
+  stop_watcher: kill 3679123
