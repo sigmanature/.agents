@@ -26,6 +26,8 @@ VMSTAT_KEYS = [
     "compact_daemon_order2_created",
     "alloc_success_order0",
     "alloc_success_order2",
+    "alloc_fail_wmark",
+    "alloc_fail_fragment",
     "pageoutrun",
     "kswapd_inodesteal",
 ]

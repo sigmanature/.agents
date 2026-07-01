@@ -4,36 +4,40 @@
 `.agents/tools/vm_start_bg.sh`
 
 ## Purpose
-Start QEMU launcher in background and emit launcher metadata (pid/log paths).
+Start QEMU in background with built-in readiness verification. Blocks until qemu is confirmed ready, or fails with a clear reason.
+
+## Usage
+```bash
+bash .agents/tools/vm_start_bg.sh
+```
+Set `SKIP_VERIFY=1` to skip verification (debug only).
 
 ## Inputs
-- arg1: `LAUNCH_LOG` (optional, default `.roo/plans/qemu-launch.log`)
-- arg2: `PID_FILE` (optional, default `.roo/plans/qemu.pid`)
-- arg3: `CONSOLE_LOG` (optional, default `guest_console.log`)
+- optional positional args: `LAUNCH_LOG PID_FILE CONSOLE_LOG` (rarely needed)
 - requires `.vars.sh` with: `BASE`, `SCRIPT`, `IMG_BASE`
-- instance mode (preferred for parallel):
-  - `--launcher ubuntu-cow --instance vm2`
-  - optional: `--launch-log <path> --pid-file <path> --console-log <path>`
+- env `SKIP_VERIFY=1` to skip built-in verification
+
+## Verification sequence (all inline, no manual steps needed)
+1. Start `qemu_start_ori.sh` via nohup
+2. Poll for `qemu-system-aarch64` process (90s timeout, 2s interval)
+3. Poll for `/tmp/qga.sock` and `/tmp/qemu-qmp.sock` (90s timeout)
+4. QGA handshake with retries (5 attempts, 2s apart)
+5. Print final status
 
 ## Output
-Prints key-value lines:
-- `pid=<wrapper_pid>`
+On success:
+- `status=ready`
+- `qemu_pid=<real pid>`
+- `qga_handshake=ok`
 - `launch_log=<path>`
 - `console_log=<path>`
-- `launcher=<ori|ubuntu-cow>`
-- when `--instance` is used: `instance=<name>` and `instance_env=<path>`
+
+On failure:
+- `status=failed`
+- `reason=no_qemu_process|no_qga_socket|qga_handshake_failed`
+- `launch_log=<path>` (check this first)
 
 ## Important behavior
-- `pid` is the `nohup` wrapper PID, not guaranteed to be long-lived `qemu-system-aarch64`.
-- Must follow with explicit post-check:
-  - process: `ps ... qemu-system-aarch64`
-  - sockets: legacy `/tmp/qga.sock` / multi-instance `VM_QGA_SOCK` in `instance.env`
-  - handshake: `python3 .agents/tools/qga_exec.py --sock <qga_sock> 'echo qga_ok'`
-
-## Common failures
-- wrapper exits quickly without useful logs
-- background starts but `qga_exec.py` fails due to missing socket
-- socket exists but `ConnectionRefusedError`
-
-Use troubleshooting playbook:
-[`qga-startup-troubleshooting.md`](qga-startup-troubleshooting.md)
+- The script blocks until verification passes or times out. This is intentional.
+- `qemu_pid` is the real `qemu-system-aarch64` PID, not a wrapper.
+- Do not run separate `ps`/socket/handshake checks after this script. The script already did them.

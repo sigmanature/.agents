@@ -1,4 +1,5 @@
 import type { Plugin } from "@opencode-ai/plugin"
+import { appendFileSync } from "fs"
 
 const SEARCH_TOOLS = new Set([
   "grep",
@@ -67,8 +68,13 @@ export const SummaryFormatterPlugin: Plugin = async (_ctx) => {
     },
 
     "tool.execute.after": async (input, output) => {
-      if (SEARCH_TOOLS.has(input.tool) && output.output && output.output.length > 200) {
+      if (SEARCH_TOOLS.has(input.tool) && output.output) {
         output.output += TOOL_REMINDER
+        appendFileSync("/tmp/opencode-plugin-hooks.log", JSON.stringify({
+          ts: new Date().toISOString(),
+          tool: input.tool,
+          event: "TOOL_REMINDER_APPENDED",
+        }) + "\n")
       }
     },
   }

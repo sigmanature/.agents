@@ -7,16 +7,13 @@ Run in this exact order after start:
 
 1. Process check:
 ```bash
-ps -ef | grep -E 'qemu-system-aarch64|qemu_start_ori.sh|qemu_start_ubuntu.sh' | grep -v grep
+ps -ef | grep -E 'qemu-system-aarch64|qemu_start_ori.sh' | grep -v grep
 ```
 
 2. Socket check:
 ```bash
 ls -l /tmp/qga.sock /tmp/qemu-qmp.sock
 ```
-
-For multi-instance mode, prefer reading socket paths from:
-`myscripts/vm_instances/<instance>/instance.env` (`VM_QGA_SOCK`, `VM_QMP_SOCK`).
 
 3. Handshake check:
 ```bash
