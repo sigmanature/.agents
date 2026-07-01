@@ -35,96 +35,43 @@ set +a
 ### Directory structure introduction
 - `$TEST`  refer to `myscripts/shared_with_qemu/test`has all test script that should run in vm instance.
 - `$SCRIPT` refer to `myscripts` has QEMU launchers:
-  - legacy single-VM: `qemu_start_ori.sh` (deprecated for new work)
-  - multi-instance CoW: `qemu_start_ubuntu.sh` (preferred)
-- `myscripts/vm_instances/<instance>/instance.env` is the per-VM source of truth for: ssh/http/gdb port, QGA/QMP socket, pidfile, console log.
+  - single-VM: `qemu_start_ori.sh` (primary launcher)
 - `guest_console.log` is real time log and changes fast. Prefer targeted `rg` patterns and/or `tail -n` when analyzing.
 
 ## QEMU start policy
 
-When starting the VM:
+When starting the VM, use one command that includes built-in verification:
 
-- Prefer multi-instance mode for anything that may need parallelism or isolation:
-  - launcher: `myscripts/qemu_start_ubuntu.sh start vm<N>`
-  - wrapper: `bash .agents/tools/vm_start_bg.sh --launcher ubuntu-cow --instance vm<N> ...`
-- Treat `myscripts/qemu_start_ori.sh` as legacy/diagnosis-only for new work. Do not build new automation on top of fixed `/tmp/qga.sock` + fixed `5022`.
-- Never run a launcher in a way that blocks the chat session; start QEMU in the background for automation.
-- When using `myscripts/qemu_start_ori.sh` interactively in a PTY, prefer its explicit stdio multiplexer path with `signal=off` so host `Ctrl-C` does not kill the VM.
-- Preserve the caller's launch directory so `guest_console.log` remains in the directory from which the start command was issued.
-- Prefer wrappers under `.agents/tools/` instead of ad-hoc `nohup` calls.
-- After starting QEMU, immediately verify process status and whether SSH on the forwarded guest port is expected to come up.
-- Verify the real QEMU process list with `ps aux | grep qemu` or an equivalent process inspection, not only with port checks.
-- If the launcher log shows a host-forwarding error such as `Could not set up host forwarding rule`, treat that as a strong signal that another QEMU instance may already be holding the forwarded port.
-- In that situation, inspect the existing QEMU process list first and prefer reusing the already-running VM instead of claiming the new launch succeeded.
-- Report clearly where the launcher log and guest console log are located.
-- Treat `vm_start_bg.sh`'s printed PID as **wrapper PID**, not proof that `qemu-system-aarch64` is alive.
-- Always perform a post-start handshake:
-  1. `ps` check for `qemu-system-aarch64`
-  2. instance socket check (read from `instance.env` when using multi-instance mode)
-  3. real QGA probe with explicit socket: `python3 .agents/tools/qga_exec.py --sock <qga_sock> 'echo qga_ok'`
+```bash
+source .vars.sh && bash .agents/tools/vm_start_bg.sh
+```
 
-Default execution pattern:
+This script starts QEMU in background and blocks until readiness is confirmed:
+- waits for `qemu-system-aarch64` process (90s timeout)
+- waits for `/tmp/qga.sock` and `/tmp/qemu-qmp.sock`
+- runs QGA handshake (`echo qga_ok && uname -a`)
+- prints `status=ready` and the real QEMU PID, or `status=failed` with reason
 
-1. Source `.vars.sh`.
-2. Start VM in background:
-   - preferred: `bash .agents/tools/vm_start_bg.sh --launcher ubuntu-cow --instance vm2`
-   - legacy: `bash .agents/tools/vm_start_bg.sh` (starts `qemu_start_ori.sh`)
-3. Check that the QEMU process is actually alive with `ps aux | grep qemu` or equivalent process inspection.
-4. If launch logs contain host-forward setup failures, directly reuse the existing QEMU instance (do not claim the new one succeeded).
+Do not run separate post-start verification commands. The script IS the verification.
+If the script exits non-zero, read the `status=...` and `reason=...` output and act accordingly.
+
+If the launcher log shows a host-forwarding error such as `Could not set up host forwarding rule`, treat that as a strong signal that another QEMU instance may already be holding the forwarded port. In that situation, inspect the existing QEMU process list first and prefer reusing the already-running VM instead of claiming the new launch succeeded.
 
 Note: the guest can be controlled either via **SSH** (when available) or via **QEMU Guest Agent (QGA)** using `.agents/tools/qga_exec.py` (when SSH is unavailable/blocked or the user requests QGA).
 
-### QGA-first start runbook (mandatory when QGA is required)
+### QGA startup failure signals (read script output)
 
-Use this ordered flow. Do not skip verification steps.
+The script prints `status=failed` with a `reason=` field. Act on the reason directly:
 
-1. Source `.vars.sh`.
-2. Start VM in background with `.agents/tools/vm_start_bg.sh` (or equivalent wrapper).
-3. Verify `qemu-system-aarch64` exists in process list.
-4. Verify sockets exist.
-   - legacy: `/tmp/qga.sock`, `/tmp/qemu-qmp.sock`
-   - multi-instance: read paths from `myscripts/vm_instances/<instance>/instance.env` (`VM_QGA_SOCK`, `VM_QMP_SOCK`)
-5. Verify QGA handshake succeeds with a real command:
-  - `python3 .agents/tools/qga_exec.py --sock <qga_sock> 'echo qga_ok && uname -a'`
-6. If handshake succeeds, continue with test execution.
+- `reason=no_qemu_process` → qemu never appeared. Check `launch_log=` path.
+- `reason=no_qga_socket` → qemu started but sockets never appeared. QEMU may have crashed; check `console_log=` for panic.
+- `reason=qga_handshake_failed` → sockets exist but QGA is unresponsive. Guest kernel may be hung; check `console_log=`.
 
-### QGA startup failure modes observed in real runs
-
-Treat the following as first-class, reusable troubleshooting knowledge:
-
-- **False-positive background start**
-  - Symptom: wrapper exits `0`, logs only show config header, no `qemu-system-aarch64` process.
-  - Action: do not claim VM up; verify real process and fallback to foreground probe.
-- **Socket exists but QGA command fails with `ConnectionRefusedError`**
-  - Symptom: `/tmp/qga.sock` exists, but no active server behind it.
-  - Action: treat as startup failure; re-check process tree and relaunch.
-- **Socket missing and `qga_exec.py` fails with `FileNotFoundError`**
-  - Symptom: background launcher returned success-looking output, but `/tmp/qga.sock` was never created and a real QGA probe fails with `FileNotFoundError: [Errno 2] No such file or directory`.
-  - Action: treat this the same as false-positive startup; do not trust the wrapper exit code, and verify the real `qemu-system-aarch64` process first.
-- **Sandbox/no-permission bind failure**
-  - Symptom: `Failed to bind socket to /tmp/qga.sock: Operation not permitted`.
-  - Action: run VM start outside restricted sandbox.
-- **Foreground works but background appears flaky**
-  - Action: use foreground `qemu_start_ori.sh` in PTY as diagnosis mode, then switch back to verified background mode after root cause is clear.
+Do not re-attempt startup without first reading the `launch_log` and `console_log`.
 
 When the user explicitly forbids SSH, keep guest command execution on QGA only after startup. It is acceptable to keep QEMU itself attached to a PTY for host-side liveness while all guest-side setup and test commands go through `.agents/tools/qga_exec.py`.
 
 Detailed troubleshooting checklist: [`references/qga-startup-troubleshooting.md`](references/qga-startup-troubleshooting.md)
-
-## Multi-instance safety rules (parallel mode)
-
-When multiple VMs may be running at the same time, apply these rules to avoid controlling the wrong VM:
-
-- **Never** rely on "first match" `ps | grep qemu` behaviors. Require an explicit instance.
-- For QGA: always use `python3 .agents/tools/qga_exec.py --sock <VM_QGA_SOCK> '<cmd>'` (or set `QGA_SOCK=<VM_QGA_SOCK>`).
-- For SSH: use `bash .agents/tools/vm_ssh.sh --instance vm2 '<cmd>'` so the port comes from `instance.env`.
-- For stop: use `bash .agents/tools/vm_stop.sh normal --instance vm2`.
-
-Shared directory note:
-
-- The safe default is per-instance `myscripts/vm_instances/<instance>/shared_with_qemu` (isolates concurrent writes).
-- "One shared copy of scripts" is possible, but it requires separating read-only scripts from per-instance writable outputs.
-  Reference: [`references/qemu-cow-multi-instance.md`](references/qemu-cow-multi-instance.md)
 
 ## QEMU stop policy
 
@@ -190,9 +137,7 @@ Otherwise, use **SSH** via `.agents/tools/vm_ssh.sh`.
 
 ### QGA execution policy (when selected)
 
-1. Verify host-side QGA socket exists and is reachable.
-   - legacy default: `/tmp/qga.sock`
-   - multi-instance: the value in `instance.env` (`VM_QGA_SOCK`)
+1. Verify host-side QGA socket exists and is reachable: `/tmp/qga.sock`
 2. Run guest commands via:
 
 ```bash
