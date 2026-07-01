@@ -1,0 +1,1736 @@
+diff --git a/include/trace/events/huge_memory.h b/include/trace/events/huge_memory.h
+index 9b36ddda828aee399c85281a3f7c7403fdc1301f..9e5c74d65b007ceef58b620427ddf624cc584845 100644
+--- a/include/trace/events/huge_memory.h
++++ b/include/trace/events/huge_memory.h
+@@ -6,6 +6,7 @@
+ #define __HUGE_MEMORY_H
+ 
+ #include  <linux/tracepoint.h>
++#include  <linux/mthp_experiment.h>
+ 
+ #define SCAN_STATUS							\
+ 	EM( SCAN_FAIL,			"failed")			\
+@@ -349,9 +350,314 @@ TRACE_EVENT(mm_madvise_dontneed,
+ 		__entry->start + __entry->len, __get_str(vma_name))
+ );
+ 
+-TRACE_EVENT(mm_folio_partial_unmap,
+-	TP_PROTO(struct folio *folio, struct page *page, int nr,
+-		 int nr_total),
++TRACE_EVENT(mm_mthp_anon_fault_fallback,
++	TP_PROTO(struct vm_area_struct *vma, unsigned long addr,
++		 unsigned long haddr, unsigned int reason,
++		 unsigned int subreason,
++		 const struct mthp_exp_trace_info *info),
++	TP_ARGS(vma, addr, haddr, reason, subreason, info),
++	TP_STRUCT__entry(
++		__field(pid_t, pid)
++		__field(pid_t, tgid)
++		__array(char, comm, TASK_COMM_LEN)
++		__array(char, leader_comm, TASK_COMM_LEN)
++		__field(unsigned long, mm)
++		__field(unsigned long, vma_start)
++		__field(unsigned long, vma_end)
++		__field(unsigned long, vm_flags)
++		__field(unsigned long, addr)
++		__field(unsigned long, haddr)
++		__field(unsigned int, reason)
++		__field(unsigned int, subreason)
++		__field(unsigned long, requested_orders)
++		__field(unsigned long, supported_orders)
++		__field(unsigned long, always_orders)
++		__field(unsigned long, madvise_orders)
++		__field(unsigned long, inherit_orders)
++		__field(unsigned long, effective_orders)
++		__field(unsigned long, allowable_orders)
++		__field(unsigned long, suitable_orders)
++		__string(vma_name, vma && anon_vma_name(vma) ?
++			 anon_vma_name(vma)->name : "")
++	),
++	TP_fast_assign(
++		__entry->pid = current->pid;
++		__entry->tgid = current->tgid;
++		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
++		memcpy(__entry->leader_comm,
++		       current->group_leader ? current->group_leader->comm :
++		       current->comm, TASK_COMM_LEN);
++		__entry->mm = (unsigned long)(vma ? vma->vm_mm : current->mm);
++		__entry->vma_start = vma ? vma->vm_start : 0;
++		__entry->vma_end = vma ? vma->vm_end : 0;
++		__entry->vm_flags = vma ? vma->vm_flags : 0;
++		__entry->addr = addr;
++		__entry->haddr = haddr;
++		__entry->reason = reason;
++		__entry->subreason = subreason;
++		__entry->requested_orders = info->requested;
++		__entry->supported_orders = info->supported;
++		__entry->always_orders = info->always;
++		__entry->madvise_orders = info->madvise;
++		__entry->inherit_orders = info->inherit;
++		__entry->effective_orders = info->effective;
++		__entry->allowable_orders = info->allowable;
++		__entry->suitable_orders = info->suitable;
++		__assign_str(vma_name);
++	),
++	TP_printk("pid=%d tgid=%d comm=%s leader_comm=%s mm=0x%lx vma=[0x%lx-0x%lx] vm_flags=0x%lx addr=0x%lx haddr=0x%lx reason=%u subreason=%u requested=0x%lx supported=0x%lx always=0x%lx madvise=0x%lx inherit=0x%lx effective=0x%lx allowable=0x%lx suitable=0x%lx vma_name=\"%s\"",
++		__entry->pid, __entry->tgid, __entry->comm,
++		__entry->leader_comm, __entry->mm, __entry->vma_start,
++		__entry->vma_end, __entry->vm_flags, __entry->addr,
++		__entry->haddr, __entry->reason, __entry->subreason,
++		__entry->requested_orders, __entry->supported_orders,
++		__entry->always_orders, __entry->madvise_orders,
++		__entry->inherit_orders, __entry->effective_orders,
++		__entry->allowable_orders, __entry->suitable_orders,
++		__get_str(vma_name))
++);
++
++TRACE_EVENT(mm_mthp_swapin_fallback,
++	TP_PROTO(struct vm_area_struct *vma, unsigned long addr,
++		 unsigned long haddr, unsigned int reason,
++		 unsigned int subreason,
++		 const struct mthp_exp_trace_info *info),
++	TP_ARGS(vma, addr, haddr, reason, subreason, info),
++	TP_STRUCT__entry(
++		__field(pid_t, pid)
++		__field(pid_t, tgid)
++		__array(char, comm, TASK_COMM_LEN)
++		__array(char, leader_comm, TASK_COMM_LEN)
++		__field(unsigned long, mm)
++		__field(unsigned long, vma_start)
++		__field(unsigned long, vma_end)
++		__field(unsigned long, vm_flags)
++		__field(unsigned long, addr)
++		__field(unsigned long, haddr)
++		__field(unsigned long, swp_offset)
++		__field(unsigned int, reason)
++		__field(unsigned int, subreason)
++		__field(unsigned long, requested_orders)
++		__field(unsigned long, supported_orders)
++		__field(unsigned long, always_orders)
++		__field(unsigned long, madvise_orders)
++		__field(unsigned long, inherit_orders)
++		__field(unsigned long, effective_orders)
++		__field(unsigned long, allowable_orders)
++		__field(unsigned long, suitable_orders)
++		__string(vma_name, vma && anon_vma_name(vma) ?
++			 anon_vma_name(vma)->name : "")
++	),
++	TP_fast_assign(
++		__entry->pid = current->pid;
++		__entry->tgid = current->tgid;
++		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
++		memcpy(__entry->leader_comm,
++		       current->group_leader ? current->group_leader->comm :
++		       current->comm, TASK_COMM_LEN);
++		__entry->mm = (unsigned long)(vma ? vma->vm_mm : current->mm);
++		__entry->vma_start = vma ? vma->vm_start : 0;
++		__entry->vma_end = vma ? vma->vm_end : 0;
++		__entry->vm_flags = vma ? vma->vm_flags : 0;
++		__entry->addr = addr;
++		__entry->haddr = haddr;
++		__entry->swp_offset = info->swp_offset;
++		__entry->reason = reason;
++		__entry->subreason = subreason;
++		__entry->requested_orders = info->requested;
++		__entry->supported_orders = info->supported;
++		__entry->always_orders = info->always;
++		__entry->madvise_orders = info->madvise;
++		__entry->inherit_orders = info->inherit;
++		__entry->effective_orders = info->effective;
++		__entry->allowable_orders = info->allowable;
++		__entry->suitable_orders = info->suitable;
++		__assign_str(vma_name);
++	),
++	TP_printk("pid=%d tgid=%d comm=%s leader_comm=%s mm=0x%lx vma=[0x%lx-0x%lx] vm_flags=0x%lx addr=0x%lx haddr=0x%lx swp_offset=0x%lx reason=%u subreason=%u requested=0x%lx supported=0x%lx always=0x%lx madvise=0x%lx inherit=0x%lx effective=0x%lx allowable=0x%lx suitable=0x%lx vma_name=\"%s\"",
++		__entry->pid, __entry->tgid, __entry->comm,
++		__entry->leader_comm, __entry->mm, __entry->vma_start,
++		__entry->vma_end, __entry->vm_flags, __entry->addr,
++		__entry->haddr, __entry->swp_offset, __entry->reason,
++		__entry->subreason, __entry->requested_orders,
++		__entry->supported_orders, __entry->always_orders,
++		__entry->madvise_orders, __entry->inherit_orders,
++		__entry->effective_orders, __entry->allowable_orders,
++		__entry->suitable_orders, __get_str(vma_name))
++	);
++
++	TRACE_EVENT(mm_mthp_uffd_mfill,
++	TP_PROTO(struct vm_area_struct *vma, unsigned long dst_addr,
++		 unsigned long src_addr, unsigned int mode, int ret,
++		 unsigned int stage, unsigned int is_shmem),
++	TP_ARGS(vma, dst_addr, src_addr, mode, ret, stage, is_shmem),
++	TP_STRUCT__entry(
++		__field(pid_t, pid)
++		__field(pid_t, tgid)
++		__array(char, comm, TASK_COMM_LEN)
++		__array(char, leader_comm, TASK_COMM_LEN)
++		__field(unsigned long, mm)
++		__field(unsigned long, vma_start)
++		__field(unsigned long, vma_end)
++		__field(unsigned long, vm_flags)
++		__field(unsigned long, dst_addr)
++		__field(unsigned long, src_addr)
++		__field(unsigned int, mode)
++		__field(int, ret)
++		__field(unsigned int, stage)
++		__field(unsigned int, is_shmem)
++		__string(vma_name, vma && anon_vma_name(vma) ?
++			 anon_vma_name(vma)->name : "")
++	),
++	TP_fast_assign(
++		__entry->pid = current->pid;
++		__entry->tgid = current->tgid;
++		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
++		memcpy(__entry->leader_comm,
++		       current->group_leader ? current->group_leader->comm :
++		       current->comm, TASK_COMM_LEN);
++		__entry->mm = (unsigned long)(vma ? vma->vm_mm : current->mm);
++		__entry->vma_start = vma ? vma->vm_start : 0;
++		__entry->vma_end = vma ? vma->vm_end : 0;
++		__entry->vm_flags = vma ? vma->vm_flags : 0;
++		__entry->dst_addr = dst_addr;
++		__entry->src_addr = src_addr;
++		__entry->mode = mode;
++		__entry->ret = ret;
++		__entry->stage = stage;
++		__entry->is_shmem = is_shmem;
++		__assign_str(vma_name);
++	),
++	TP_printk("pid=%d tgid=%d comm=%s leader_comm=%s mm=0x%lx vma=[0x%lx-0x%lx] vm_flags=0x%lx dst=0x%lx src=0x%lx mode=%u stage=%u ret=%d is_shmem=%u vma_name=\"%s\"",
++		__entry->pid, __entry->tgid, __entry->comm,
++		__entry->leader_comm, __entry->mm, __entry->vma_start,
++		__entry->vma_end, __entry->vm_flags, __entry->dst_addr,
++		__entry->src_addr, __entry->mode, __entry->stage,
++		__entry->ret, __entry->is_shmem, __get_str(vma_name))
++	);
++
++	TRACE_EVENT(mm_mthp_swapin_offset_mismatch_birth,
++		TP_PROTO(struct vm_area_struct *vma, unsigned long addr,
++			 swp_entry_t swpentry, unsigned int class_result,
++			 const struct mthp_exp_swap_birth_record *birth),
++		TP_ARGS(vma, addr, swpentry, class_result, birth),
++		TP_STRUCT__entry(
++			__field(pid_t, pid)
++			__field(pid_t, tgid)
++			__array(char, comm, TASK_COMM_LEN)
++			__array(char, leader_comm, TASK_COMM_LEN)
++			__field(unsigned long, mm)
++			__field(unsigned long, vma_start)
++			__field(unsigned long, vma_end)
++			__field(unsigned long, vm_flags)
++			__field(unsigned long, addr)
++			__field(unsigned long, addr_mod4)
++			__field(unsigned long, swp_offset)
++			__field(unsigned long, swp_mod4)
++			__field(unsigned int, swp_type)
++			__field(unsigned int, class_result)
++			__field(unsigned int, birth_found)
++			__field(unsigned int, birth_stale)
++			__field(unsigned long, birth_seq)
++			__field(unsigned long, birth_addr)
++			__field(unsigned long, birth_addr_mod4)
++			__field(unsigned long, birth_mm)
++			__field(unsigned long, birth_vma_start)
++			__field(unsigned long, birth_vma_end)
++			__field(unsigned long, birth_folio_pfn)
++			__field(unsigned int, birth_folio_order)
++			__field(unsigned int, birth_subpage_idx)
++			__field(unsigned int, birth_origin)
++			__field(unsigned int, birth_origin_subreason)
++			__array(char, birth_comm, TASK_COMM_LEN)
++			__array(char, birth_leader_comm, TASK_COMM_LEN)
++			__field(unsigned int, transfer_reason)
++			__field(unsigned long, transfer_old_mm)
++			__field(unsigned long, transfer_new_mm)
++			__field(unsigned long, transfer_old_addr)
++			__field(unsigned long, transfer_new_addr)
++			__field(unsigned long, transfer_old_mod4)
++			__field(unsigned long, transfer_new_mod4)
++			__array(char, transfer_comm, TASK_COMM_LEN)
++			__string(vma_name, vma && anon_vma_name(vma) ?
++				 anon_vma_name(vma)->name : "")
++			__string(birth_vma_name, birth ? birth->birth_vma_name : "")
++		),
++		TP_fast_assign(
++			__entry->pid = current->pid;
++			__entry->tgid = current->tgid;
++			memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
++			memcpy(__entry->leader_comm,
++			       current->group_leader ? current->group_leader->comm :
++			       current->comm, TASK_COMM_LEN);
++			__entry->mm = (unsigned long)(vma ? vma->vm_mm : current->mm);
++			__entry->vma_start = vma ? vma->vm_start : 0;
++			__entry->vma_end = vma ? vma->vm_end : 0;
++			__entry->vm_flags = vma ? vma->vm_flags : 0;
++			__entry->addr = addr;
++			__entry->addr_mod4 = (addr >> PAGE_SHIFT) & 3;
++			__entry->swp_offset = swp_offset(swpentry);
++			__entry->swp_mod4 = swp_offset(swpentry) & 3;
++			__entry->swp_type = swp_type(swpentry);
++			__entry->class_result = class_result;
++			__entry->birth_found = birth ? birth->found : 0;
++			__entry->birth_stale = birth ? birth->stale : 0;
++			__entry->birth_seq = birth ? birth->seq : 0;
++			__entry->birth_addr = birth ? birth->birth_addr : 0;
++			__entry->birth_addr_mod4 = birth ? birth->birth_addr_mod4 : 0;
++			__entry->birth_mm = birth ? birth->birth_mm : 0;
++			__entry->birth_vma_start = birth ? birth->birth_vma_start : 0;
++			__entry->birth_vma_end = birth ? birth->birth_vma_end : 0;
++			__entry->birth_folio_pfn = birth ? birth->birth_folio_pfn : 0;
++			__entry->birth_folio_order = birth ? birth->birth_folio_order : 0;
++			__entry->birth_subpage_idx = birth ? birth->birth_subpage_idx : 0;
++			__entry->birth_origin = birth ? birth->birth_origin : 0;
++			__entry->birth_origin_subreason = birth ? birth->birth_origin_subreason : 0;
++			if (birth) {
++				memcpy(__entry->birth_comm, birth->birth_comm, TASK_COMM_LEN);
++				memcpy(__entry->birth_leader_comm, birth->birth_leader_comm,
++				       TASK_COMM_LEN);
++				memcpy(__entry->transfer_comm, birth->transfer_comm,
++				       TASK_COMM_LEN);
++			} else {
++				memset(__entry->birth_comm, 0, TASK_COMM_LEN);
++				memset(__entry->birth_leader_comm, 0, TASK_COMM_LEN);
++				memset(__entry->transfer_comm, 0, TASK_COMM_LEN);
++			}
++			__entry->transfer_reason = birth ? birth->transfer_reason : 0;
++			__entry->transfer_old_mm = birth ? birth->transfer_old_mm : 0;
++			__entry->transfer_new_mm = birth ? birth->transfer_new_mm : 0;
++			__entry->transfer_old_addr = birth ? birth->transfer_old_addr : 0;
++			__entry->transfer_new_addr = birth ? birth->transfer_new_addr : 0;
++			__entry->transfer_old_mod4 = birth ? birth->transfer_old_mod4 : 0;
++			__entry->transfer_new_mod4 = birth ? birth->transfer_new_mod4 : 0;
++			__assign_str(vma_name);
++			__assign_str(birth_vma_name);
++		),
++		TP_printk("pid=%d tgid=%d comm=%s leader_comm=%s mm=0x%lx vma=[0x%lx-0x%lx] vm_flags=0x%lx addr=0x%lx addr_mod4=%lu swp_type=%u swp_offset=0x%lx swp_mod4=%lu class=%u birth_found=%u birth_stale=%u birth_seq=%lu birth_mm=0x%lx birth_vma=[0x%lx-0x%lx] birth_addr=0x%lx birth_addr_mod4=%lu birth_folio_pfn=0x%lx birth_order=%u birth_subpage_idx=%u birth_origin=%u birth_origin_subreason=%u birth_comm=%s birth_leader_comm=%s transfer_reason=%u transfer_old_mm=0x%lx transfer_new_mm=0x%lx transfer_old_addr=0x%lx transfer_new_addr=0x%lx transfer_old_mod4=%lu transfer_new_mod4=%lu transfer_comm=%s vma_name=\"%s\" birth_vma_name=\"%s\"",
++			__entry->pid, __entry->tgid, __entry->comm,
++			__entry->leader_comm, __entry->mm, __entry->vma_start,
++			__entry->vma_end, __entry->vm_flags, __entry->addr,
++			__entry->addr_mod4, __entry->swp_type, __entry->swp_offset,
++			__entry->swp_mod4, __entry->class_result,
++			__entry->birth_found, __entry->birth_stale,
++			__entry->birth_seq, __entry->birth_mm,
++			__entry->birth_vma_start, __entry->birth_vma_end,
++			__entry->birth_addr, __entry->birth_addr_mod4,
++			__entry->birth_folio_pfn, __entry->birth_folio_order,
++			__entry->birth_subpage_idx, __entry->birth_origin,
++			__entry->birth_origin_subreason, __entry->birth_comm,
++			__entry->birth_leader_comm, __entry->transfer_reason,
++			__entry->transfer_old_mm, __entry->transfer_new_mm,
++			__entry->transfer_old_addr, __entry->transfer_new_addr,
++			__entry->transfer_old_mod4, __entry->transfer_new_mod4,
++			__entry->transfer_comm, __get_str(vma_name),
++			__get_str(birth_vma_name))
++	);
++
++		TRACE_EVENT(mm_folio_partial_unmap,
++		TP_PROTO(struct folio *folio, struct page *page, int nr,
++			 int nr_total),
+ 	TP_ARGS(folio, page, nr, nr_total),
+ 	TP_STRUCT__entry(
+ 		__field(unsigned long, folio_pfn)
+diff --git a/mm/Makefile b/mm/Makefile
+index 354ff4c332b9dd5b0b77e260df49b509e0a4c15e..531baf0604d539255f7e809a56499d0f8d557844 100644
+--- a/mm/Makefile
++++ b/mm/Makefile
+@@ -128,6 +128,7 @@ obj-$(CONFIG_CMA_DEBUGFS) += cma_debug.o
+ obj-$(CONFIG_SECRETMEM) += secretmem.o
+ obj-$(CONFIG_CMA_SYSFS) += cma_sysfs.o
+ obj-$(CONFIG_USERFAULTFD) += userfaultfd.o
++obj-y += mthp_experiment.o
+ obj-$(CONFIG_IDLE_PAGE_TRACKING) += page_idle.o
+ obj-$(CONFIG_DEBUG_PAGEALLOC) += debug_page_alloc.o
+ obj-$(CONFIG_DEBUG_PAGE_REF) += debug_page_ref.o
+diff --git a/mm/huge_memory.c b/mm/huge_memory.c
+index 6170feea9171fe04262576fbb20720d25bbe93a7..c856ebcec26a51a6b3b4ecf272946f64d539afeb 100644
+--- a/mm/huge_memory.c
++++ b/mm/huge_memory.c
+@@ -53,6 +53,8 @@
+ 
+ DEFINE_PER_CPU(enum folio_split_reason, folio_split_reason);
+ DEFINE_PER_CPU(unsigned long, deferred_split_reason_counts[DSR_NR]);
++static DEFINE_PER_CPU(unsigned long, deferred_shrinker_split_count);
++static DEFINE_PER_CPU(unsigned long, deferred_shrinker_nosplit_return_count);
+ 
+ /*
+  * By default, transparent hugepage support is disabled in order to avoid
+@@ -74,6 +76,7 @@ unsigned long transparent_hugepage_flags __read_mostly =
+ 	(1<<TRANSPARENT_HUGEPAGE_USE_ZERO_PAGE_FLAG);
+ 
+ static struct shrinker *deferred_split_shrinker;
++static bool deferred_split_shrinker_nosplit;
+ static unsigned long deferred_split_count(struct shrinker *shrink,
+ 					  struct shrink_control *sc);
+ static unsigned long deferred_split_scan(struct shrinker *shrink,
+@@ -4166,6 +4169,11 @@ static unsigned long deferred_split_scan(struct shrinker *shrink,
+ 		ds_queue = &sc->memcg->deferred_split_queue;
+ #endif
+ 
++	if (READ_ONCE(deferred_split_shrinker_nosplit)) {
++		this_cpu_inc(deferred_shrinker_nosplit_return_count);
++		return 0;
++	}
++
+ 	spin_lock_irqsave(&ds_queue->split_queue_lock, flags);
+ 	/* Take pin on all head pages to avoid freeing them under us */
+ 	list_for_each_entry_safe(folio, next, &ds_queue->split_queue,
+@@ -4210,6 +4218,7 @@ static unsigned long deferred_split_scan(struct shrinker *shrink,
+ 			did_split = true;
+ 			if (underused)
+ 				count_vm_event(THP_UNDERUSED_SPLIT_PAGE);
++			this_cpu_inc(deferred_shrinker_split_count);
+ 			split++;
+ 		}
+ 		folio_unlock(folio);
+@@ -4615,6 +4624,37 @@ static const struct file_operations deferred_split_reason_fops = {
+ 	.release = single_release,
+ };
+ 
++static int deferred_split_experiment_show(struct seq_file *m, void *v)
++{
++	unsigned long split = 0, nosplit_return = 0;
++	int cpu;
++
++	for_each_possible_cpu(cpu) {
++		split += per_cpu(deferred_shrinker_split_count, cpu);
++		nosplit_return += per_cpu(deferred_shrinker_nosplit_return_count, cpu);
++	}
++
++	seq_printf(m, "deferred_shrinker_nosplit_enabled %u\n",
++		   READ_ONCE(deferred_split_shrinker_nosplit) ? 1 : 0);
++	seq_printf(m, "deferred_shrinker_split %lu\n", split);
++	seq_printf(m, "deferred_shrinker_nosplit_return %lu\n",
++		   nosplit_return);
++	return 0;
++}
++
++static int deferred_split_experiment_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, deferred_split_experiment_show, NULL);
++}
++
++static const struct file_operations deferred_split_experiment_fops = {
++	.owner	 = THIS_MODULE,
++	.open	 = deferred_split_experiment_open,
++	.read	 = seq_read,
++	.llseek	 = seq_lseek,
++	.release = single_release,
++};
++
+ static const struct file_operations split_huge_pages_fops = {
+ 	.owner	 = THIS_MODULE,
+ 	.write	 = split_huge_pages_write,
+@@ -4626,6 +4666,10 @@ static int __init split_huge_pages_debugfs(void)
+ 			    &split_huge_pages_fops);
+ 	debugfs_create_file("deferred_split_reasons", 0400, NULL, NULL,
+ 			    &deferred_split_reason_fops);
++	debugfs_create_bool("deferred_split_shrinker_nosplit", 0600, NULL,
++			    &deferred_split_shrinker_nosplit);
++	debugfs_create_file("mthp_experiment_counters", 0400, NULL, NULL,
++			    &deferred_split_experiment_fops);
+ 	return 0;
+ }
+ late_initcall(split_huge_pages_debugfs);
+diff --git a/mm/memory.c b/mm/memory.c
+index 461b070c8777a51d338cd42006b188369423bf68..dd0efac04bc11a42385fb9046cf9067a4a551ce1 100644
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -69,6 +69,7 @@
+ #include <linux/memory-tiers.h>
+ #include <linux/debugfs.h>
+ #include <linux/userfaultfd_k.h>
++#include <linux/mthp_experiment.h>
+ #include <linux/dax.h>
+ #include <linux/oom.h>
+ #include <linux/numa.h>
+@@ -78,6 +79,7 @@
+ #include <linux/sched/sysctl.h>
+ 
+ #include <trace/events/kmem.h>
++#include <trace/events/huge_memory.h>
+ 
+ #include <asm/io.h>
+ #include <asm/mmu_context.h>
+@@ -1028,6 +1030,10 @@ copy_nonpresent_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
+ 	if (!userfaultfd_wp(dst_vma))
+ 		pte = pte_swp_clear_uffd_wp(pte);
+ 	set_pte_at(dst_mm, addr, dst_pte, pte);
++	if (likely(!non_swap_entry(entry)))
++		mthp_exp_record_swap_pte_transfer(entry,
++				MTHP_EXP_TRANSFER_FORK_COPY_NONPRESENT,
++				src_mm, dst_mm, addr, addr);
+ 	return 0;
+ }
+ 
+@@ -3749,6 +3755,9 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
+ 		folio_add_lru_vma(new_folio, vma);
+ 		BUG_ON(unshare && pte_write(entry));
+ 		set_pte_at(mm, vmf->address, vmf->pte, entry);
++		mthp_exp_record_folio_origin(new_folio,
++					     MTHP_EXP_ORIGIN_COW, 0,
++					     vma, vmf->address);
+ 		update_mmu_cache_range(vmf, vma, vmf->address, vmf->pte, 1);
+ 		if (old_folio) {
+ 			/*
+@@ -4423,6 +4432,9 @@ static struct folio *__alloc_swap_folio(struct vm_fault *vmf)
+ 		return NULL;
+ 	}
+ 
++	mthp_exp_record_folio_origin(folio,
++				     MTHP_EXP_ORIGIN_SWPIN_ORDER0_FALLBACK,
++				     0, vma, vmf->address);
+ 	return folio;
+ }
+ 
+@@ -4484,6 +4496,290 @@ static inline unsigned long thp_swap_suitable_orders(pgoff_t swp_offset,
+ 	return orders;
+ }
+ 
++#define MTHP_EXP_ORDER2		2
++#define MTHP_EXP_ORDER2_MASK	BIT(MTHP_EXP_ORDER2)
++#define MTHP_EXP_ORDER2_SIZE	(PAGE_SIZE << MTHP_EXP_ORDER2)
++
++enum mthp_exp_fallback_reason {
++	MTHP_EXP_FB_UFFD_ARMED = 1,
++	MTHP_EXP_FB_ZSWAP_GUARD,
++	MTHP_EXP_FB_NO_ORDERS_ALLOWABLE,
++	MTHP_EXP_FB_NO_ORDERS_SUITABLE,
++	MTHP_EXP_FB_NO_ORDERS_SWAP_SUITABLE,
++	MTHP_EXP_FB_PTE_RANGE_OCCUPIED,
++	MTHP_EXP_FB_ALLOC_FAIL,
++	MTHP_EXP_FB_CHARGE_FAIL,
++	MTHP_EXP_FB_ALL_ORDERS_FAILED,
++	MTHP_EXP_FB_PTE_MAP,
++	MTHP_EXP_FB_CAN_SWAPIN_THP,
++};
++
++enum mthp_exp_fallback_subreason {
++	MTHP_EXP_SUB_NONE = 0,
++	MTHP_EXP_SUB_REQUESTED_LACKS_ORDER2,
++	MTHP_EXP_SUB_SUPPORTED_LACKS_ORDER2,
++	MTHP_EXP_SUB_ORDER2_NOT_IN_ALWAYS,
++	MTHP_EXP_SUB_ORDER2_ONLY_IN_MADVISE_BUT_VMA_NOT_HUGE,
++	MTHP_EXP_SUB_ORDER2_ONLY_IN_INHERIT_BUT_GLOBAL_NOT_ALLOWING,
++	MTHP_EXP_SUB_EFFECTIVE_MASK_LACKS_ORDER2,
++	MTHP_EXP_SUB_EFFECTIVE_MASK_NO_INTERSECTION,
++	MTHP_EXP_SUB_UNEXPECTED_DISABLED,
++	MTHP_EXP_SUB_ORDER2_VMA_TOO_SMALL,
++	MTHP_EXP_SUB_ORDER2_LEFT_BOUNDARY,
++	MTHP_EXP_SUB_ORDER2_RIGHT_BOUNDARY,
++	MTHP_EXP_SUB_ORDER2_FILE_PGOFF_MISALIGNED,
++	MTHP_EXP_SUB_ORDER2_SWAP_OFFSET_MISMATCH,
++	MTHP_EXP_SUB_TEMPORARY_STACK,
++	MTHP_EXP_SUB_NONANON_GLOBAL_DISABLED,
++	MTHP_EXP_SUB_NONANON_NO_HUGE_FAULT,
++	MTHP_EXP_SUB_UNKNOWN,
++};
++
++static unsigned long mthp_exp_supported_orders(struct vm_area_struct *vma)
++{
++	if (vma_is_anonymous(vma))
++		return THP_ORDERS_ALL_ANON;
++	if (vma_is_special_huge(vma))
++		return THP_ORDERS_ALL_SPECIAL;
++	return THP_ORDERS_ALL_FILE_DEFAULT;
++}
++
++static unsigned long mthp_exp_effective_anon_orders(vm_flags_t vm_flags)
++{
++	unsigned long mask = READ_ONCE(huge_anon_orders_always);
++
++	if (vm_flags & VM_HUGEPAGE)
++		mask |= READ_ONCE(huge_anon_orders_madvise);
++	if (hugepage_global_always() ||
++	    ((vm_flags & VM_HUGEPAGE) && hugepage_global_enabled()))
++		mask |= READ_ONCE(huge_anon_orders_inherit);
++	return mask;
++}
++
++static void mthp_exp_fill_order_masks(struct vm_area_struct *vma,
++				      unsigned long requested_orders,
++				      unsigned long allowable_orders,
++				      unsigned long suitable_orders,
++				      struct mthp_exp_trace_info *masks)
++{
++	masks->requested = requested_orders;
++	masks->supported = mthp_exp_supported_orders(vma);
++	masks->always = READ_ONCE(huge_anon_orders_always);
++	masks->madvise = READ_ONCE(huge_anon_orders_madvise);
++	masks->inherit = READ_ONCE(huge_anon_orders_inherit);
++	masks->effective = vma_is_anonymous(vma) ?
++		mthp_exp_effective_anon_orders(vma->vm_flags) : 0;
++	masks->allowable = allowable_orders;
++	masks->suitable = suitable_orders;
++	masks->swp_offset = 0;
++}
++
++static enum mthp_exp_fallback_subreason
++count_mthp_allowable_order2_reason(struct vm_area_struct *vma,
++				   unsigned long requested_orders, bool swpin)
++{
++	unsigned long supported = mthp_exp_supported_orders(vma);
++	unsigned long always = READ_ONCE(huge_anon_orders_always);
++	unsigned long madvise = READ_ONCE(huge_anon_orders_madvise);
++	unsigned long inherit = READ_ONCE(huge_anon_orders_inherit);
++	unsigned long effective = vma_is_anonymous(vma) ?
++		mthp_exp_effective_anon_orders(vma->vm_flags) : 0;
++	enum mthp_exp_counter counter;
++
++	if (!(requested_orders & MTHP_EXP_ORDER2_MASK)) {
++		counter = swpin ? MTHP_EXP_SWPIN_ALLOWABLE_REQUESTED_LACKS_ORDER2 :
++			MTHP_EXP_ANON_ALLOWABLE_REQUESTED_LACKS_ORDER2;
++		mthp_exp_inc(counter);
++		return MTHP_EXP_SUB_REQUESTED_LACKS_ORDER2;
++	}
++
++	if (!(supported & MTHP_EXP_ORDER2_MASK)) {
++		counter = swpin ? MTHP_EXP_SWPIN_ALLOWABLE_SUPPORTED_LACKS_ORDER2 :
++			MTHP_EXP_ANON_ALLOWABLE_SUPPORTED_LACKS_ORDER2;
++		mthp_exp_inc(counter);
++		return MTHP_EXP_SUB_SUPPORTED_LACKS_ORDER2;
++	}
++
++	if (vma_is_anonymous(vma) && !(effective & MTHP_EXP_ORDER2_MASK)) {
++		if (!(always & MTHP_EXP_ORDER2_MASK) &&
++		    (madvise & MTHP_EXP_ORDER2_MASK) &&
++		    !(vma->vm_flags & VM_HUGEPAGE)) {
++			counter = swpin ?
++				MTHP_EXP_SWPIN_ALLOWABLE_ORDER2_ONLY_IN_MADVISE_BUT_VMA_NOT_HUGE :
++				MTHP_EXP_ANON_ALLOWABLE_ORDER2_ONLY_IN_MADVISE_BUT_VMA_NOT_HUGE;
++			mthp_exp_inc(counter);
++			return MTHP_EXP_SUB_ORDER2_ONLY_IN_MADVISE_BUT_VMA_NOT_HUGE;
++		}
++		if (!(always & MTHP_EXP_ORDER2_MASK) &&
++		    (inherit & MTHP_EXP_ORDER2_MASK) &&
++		    !(hugepage_global_always() ||
++		      ((vma->vm_flags & VM_HUGEPAGE) && hugepage_global_enabled()))) {
++			counter = swpin ?
++				MTHP_EXP_SWPIN_ALLOWABLE_ORDER2_ONLY_IN_INHERIT_BUT_GLOBAL_NOT_ALLOWING :
++				MTHP_EXP_ANON_ALLOWABLE_ORDER2_ONLY_IN_INHERIT_BUT_GLOBAL_NOT_ALLOWING;
++			mthp_exp_inc(counter);
++			return MTHP_EXP_SUB_ORDER2_ONLY_IN_INHERIT_BUT_GLOBAL_NOT_ALLOWING;
++		}
++		if (!(always & MTHP_EXP_ORDER2_MASK)) {
++			counter = swpin ? MTHP_EXP_SWPIN_ALLOWABLE_ORDER2_NOT_IN_ALWAYS :
++				MTHP_EXP_ANON_ALLOWABLE_ORDER2_NOT_IN_ALWAYS;
++			mthp_exp_inc(counter);
++			return MTHP_EXP_SUB_ORDER2_NOT_IN_ALWAYS;
++		}
++		counter = swpin ? MTHP_EXP_SWPIN_ALLOWABLE_EFFECTIVE_MASK_LACKS_ORDER2 :
++			MTHP_EXP_ANON_ALLOWABLE_EFFECTIVE_MASK_LACKS_ORDER2;
++		mthp_exp_inc(counter);
++		return MTHP_EXP_SUB_EFFECTIVE_MASK_LACKS_ORDER2;
++	}
++
++	if (vma_is_anonymous(vma) &&
++	    !(requested_orders & supported & effective)) {
++		counter = swpin ? MTHP_EXP_SWPIN_ALLOWABLE_EFFECTIVE_MASK_NO_INTERSECTION :
++			MTHP_EXP_ANON_ALLOWABLE_EFFECTIVE_MASK_NO_INTERSECTION;
++		mthp_exp_inc(counter);
++		return MTHP_EXP_SUB_EFFECTIVE_MASK_NO_INTERSECTION;
++	}
++
++	if (!vma->vm_mm || thp_disabled_by_hw() ||
++	    vma_thp_disabled(vma, vma->vm_flags, false)) {
++		counter = swpin ? MTHP_EXP_SWPIN_ALLOWABLE_UNEXPECTED_DISABLED :
++			MTHP_EXP_ANON_ALLOWABLE_UNEXPECTED_DISABLED;
++		mthp_exp_inc(counter);
++		return MTHP_EXP_SUB_UNEXPECTED_DISABLED;
++	}
++
++	if (vma_is_temporary_stack(vma)) {
++		counter = swpin ? MTHP_EXP_SWPIN_ALLOWABLE_TEMPORARY_STACK :
++			MTHP_EXP_ANON_ALLOWABLE_TEMPORARY_STACK;
++		mthp_exp_inc(counter);
++		return MTHP_EXP_SUB_TEMPORARY_STACK;
++	}
++
++	if (!vma_is_anonymous(vma)) {
++		if (!hugepage_global_enabled() ||
++		    (!(vma->vm_flags & VM_HUGEPAGE) && !hugepage_global_always())) {
++			if (swpin)
++				mthp_exp_inc(MTHP_EXP_SWPIN_ALLOWABLE_NONANON_GLOBAL_DISABLED);
++			return MTHP_EXP_SUB_NONANON_GLOBAL_DISABLED;
++		}
++
++		if (!vma->vm_ops || !vma->vm_ops->huge_fault) {
++			if (swpin)
++				mthp_exp_inc(MTHP_EXP_SWPIN_ALLOWABLE_NONANON_NO_HUGE_FAULT);
++			return MTHP_EXP_SUB_NONANON_NO_HUGE_FAULT;
++		}
++	}
++
++	counter = swpin ? MTHP_EXP_SWPIN_ALLOWABLE_UNKNOWN :
++		MTHP_EXP_ANON_ALLOWABLE_UNKNOWN;
++	mthp_exp_inc(counter);
++	return MTHP_EXP_SUB_UNKNOWN;
++}
++
++static enum mthp_exp_fallback_subreason
++count_mthp_suitable_order2_reason(struct vm_area_struct *vma,
++				  unsigned long addr, bool swpin)
++{
++	unsigned long size = MTHP_EXP_ORDER2_SIZE;
++	unsigned long haddr = ALIGN_DOWN(addr, size);
++
++	if (!vma_is_anonymous(vma) &&
++	    !IS_ALIGNED((vma->vm_start >> PAGE_SHIFT) - vma->vm_pgoff,
++			size >> PAGE_SHIFT)) {
++		if (swpin)
++			mthp_exp_inc(MTHP_EXP_SWPIN_SUITABLE_FILE_PGOFF_MISALIGNED_ORDER2);
++		return MTHP_EXP_SUB_ORDER2_FILE_PGOFF_MISALIGNED;
++	}
++
++	if (vma->vm_end - vma->vm_start < size) {
++		mthp_exp_inc(swpin ? MTHP_EXP_SWPIN_SUITABLE_ORDER2_VMA_TOO_SMALL :
++			MTHP_EXP_ANON_SUITABLE_ORDER2_VMA_TOO_SMALL);
++		return MTHP_EXP_SUB_ORDER2_VMA_TOO_SMALL;
++	}
++
++	if (haddr < vma->vm_start) {
++		mthp_exp_inc(swpin ? MTHP_EXP_SWPIN_SUITABLE_ORDER2_LEFT_BOUNDARY :
++			MTHP_EXP_ANON_SUITABLE_ORDER2_LEFT_BOUNDARY);
++		return MTHP_EXP_SUB_ORDER2_LEFT_BOUNDARY;
++	}
++
++	if (haddr + size > vma->vm_end) {
++		mthp_exp_inc(swpin ? MTHP_EXP_SWPIN_SUITABLE_ORDER2_RIGHT_BOUNDARY :
++			MTHP_EXP_ANON_SUITABLE_ORDER2_RIGHT_BOUNDARY);
++		return MTHP_EXP_SUB_ORDER2_RIGHT_BOUNDARY;
++	}
++
++	mthp_exp_inc(swpin ? MTHP_EXP_SWPIN_SUITABLE_UNKNOWN :
++		MTHP_EXP_ANON_SUITABLE_UNKNOWN);
++	return MTHP_EXP_SUB_UNKNOWN;
++}
++
++static enum mthp_exp_fallback_subreason
++count_swpin_swap_suitable_order2_reason(unsigned long swp_offset,
++					unsigned long addr,
++					unsigned long orders)
++{
++	unsigned long nr = 1UL << MTHP_EXP_ORDER2;
++	unsigned long addr_mod, swp_mod;
++
++	if ((orders & MTHP_EXP_ORDER2_MASK) &&
++	    (addr >> PAGE_SHIFT) % nr != swp_offset % nr) {
++		addr_mod = (addr >> PAGE_SHIFT) & 3;
++		swp_mod = swp_offset & 3;
++
++		mthp_exp_inc(MTHP_EXP_SWPIN_SWAP_SUITABLE_ORDER2_OFFSET_MISMATCH);
++		mthp_exp_inc(MTHP_EXP_SWPIN_OFFSET_MISMATCH_ADDR0_SWP0 +
++			     addr_mod * 4 + swp_mod);
++		return MTHP_EXP_SUB_ORDER2_SWAP_OFFSET_MISMATCH;
++	}
++
++	return MTHP_EXP_SUB_UNKNOWN;
++}
++
++static void trace_anon_fault_fallback(struct vm_area_struct *vma,
++				      unsigned long addr,
++				      unsigned int reason,
++				      unsigned int subreason,
++				      struct mthp_exp_trace_info *masks)
++{
++	trace_mm_mthp_anon_fault_fallback(vma, addr,
++		ALIGN_DOWN(addr, MTHP_EXP_ORDER2_SIZE), reason, subreason,
++			masks);
++}
++
++static enum mthp_exp_folio_origin mthp_exp_anon_fallback_origin(unsigned int reason)
++{
++	switch (reason) {
++	case MTHP_EXP_FB_UFFD_ARMED:
++		return MTHP_EXP_ORIGIN_ANON_FALLBACK_UFFD;
++	case MTHP_EXP_FB_NO_ORDERS_ALLOWABLE:
++		return MTHP_EXP_ORIGIN_ANON_FALLBACK_ALLOWABLE;
++	case MTHP_EXP_FB_NO_ORDERS_SUITABLE:
++		return MTHP_EXP_ORIGIN_ANON_FALLBACK_VMA_SUITABLE;
++	case MTHP_EXP_FB_PTE_RANGE_OCCUPIED:
++		return MTHP_EXP_ORIGIN_ANON_FALLBACK_PTE_OCCUPIED;
++	case MTHP_EXP_FB_ALLOC_FAIL:
++		return MTHP_EXP_ORIGIN_ANON_FALLBACK_ALLOC_FAIL;
++	case MTHP_EXP_FB_CHARGE_FAIL:
++		return MTHP_EXP_ORIGIN_ANON_FALLBACK_CHARGE_FAIL;
++	case MTHP_EXP_FB_ALL_ORDERS_FAILED:
++		return MTHP_EXP_ORIGIN_ANON_FALLBACK_ALL_ORDERS_FAILED;
++	default:
++		return MTHP_EXP_ORIGIN_UNKNOWN;
++	}
++}
++
++static void trace_swpin_fallback(struct vm_area_struct *vma,
++				 unsigned long addr, swp_entry_t entry,
++				 unsigned int reason, unsigned int subreason,
++				 struct mthp_exp_trace_info *masks)
++{
++	masks->swp_offset = swp_offset(entry);
++	trace_mm_mthp_swapin_fallback(vma, addr,
++		ALIGN_DOWN(addr, MTHP_EXP_ORDER2_SIZE), reason, subreason,
++		masks);
++}
++
+ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
+ {
+ 	struct vm_area_struct *vma = vmf->vma;
+@@ -4491,17 +4787,26 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
+ 	struct folio *folio;
+ 	unsigned long addr;
+ 	swp_entry_t entry;
++	unsigned long requested_orders = BIT(PMD_ORDER) - 1;
++	unsigned long allowable_orders = 0;
++	unsigned long suitable_orders = 0;
++	struct mthp_exp_trace_info masks;
++	struct mthp_exp_swap_birth_record birth;
++	unsigned int subreason;
++	unsigned int mismatch_class;
+ 	spinlock_t *ptl;
+ 	pte_t *pte;
+ 	gfp_t gfp;
+ 	int order;
+ 
++	entry = pte_to_swp_entry(vmf->orig_pte);
++
+ 	/*
+ 	 * If uffd is active for the vma we need per-page fault fidelity to
+ 	 * maintain the uffd semantics.
+ 	 */
+ 	if (unlikely(userfaultfd_armed(vma)))
+-		goto fallback;
++		goto fallback_uffd;
+ 
+ 	/*
+ 	 * A large swapped out folio could be partially or fully in zswap. We
+@@ -4509,26 +4814,34 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
+ 	 * folio.
+ 	 */
+ 	if (!zswap_never_enabled())
+-		goto fallback;
++		goto fallback_zswap_guard;
+ 
+-	entry = pte_to_swp_entry(vmf->orig_pte);
+ 	/*
+ 	 * Get a list of all the (large) orders below PMD_ORDER that are enabled
+ 	 * and suitable for swapping THP.
+ 	 */
+ 	orders = thp_vma_allowable_orders(vma, vma->vm_flags, TVA_PAGEFAULT,
+-					  BIT(PMD_ORDER) - 1);
++					  requested_orders);
++	if (!orders)
++		goto fallback_no_orders_allowable;
++	allowable_orders = orders;
++
+ 	orders = thp_vma_suitable_orders(vma, vmf->address, orders);
++	if (!orders)
++		goto fallback_no_orders_vma_suitable;
++	suitable_orders = orders;
++
+ 	orders = thp_swap_suitable_orders(swp_offset(entry),
+ 					  vmf->address, orders);
+-
+ 	if (!orders)
+-		goto fallback;
++		goto fallback_no_orders_swap_suitable;
++	if (orders & MTHP_EXP_ORDER2_MASK)
++		mthp_exp_inc(MTHP_EXP_SWPIN_ORDER2_PHASE_PASS);
+ 
+ 	pte = pte_offset_map_lock(vmf->vma->vm_mm, vmf->pmd,
+ 				  vmf->address & PMD_MASK, &ptl);
+ 	if (unlikely(!pte))
+-		goto fallback;
++		goto fallback_pte_map;
+ 
+ 	/*
+ 	 * For do_swap_page, find the highest order where the aligned range is
+@@ -4537,12 +4850,17 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
+ 	order = highest_order(orders);
+ 	while (orders) {
+ 		addr = ALIGN_DOWN(vmf->address, PAGE_SIZE << order);
+-		if (can_swapin_thp(vmf, pte + pte_index(addr), 1 << order))
++		if (can_swapin_thp(vmf, pte + pte_index(addr), 1 << order)) {
++			if (order == MTHP_EXP_ORDER2)
++				mthp_exp_inc(MTHP_EXP_SWPIN_ORDER2_CAN_SWAPIN_PASS);
+ 			break;
++		}
+ 		order = next_order(&orders, order);
+ 	}
+ 
+ 	pte_unmap_unlock(pte, ptl);
++	if (!orders)
++		goto fallback_can_swapin_thp;
+ 
+ 	/* Try allocating the highest of the remaining orders. */
+ 	gfp = vma_thp_gfp_mask(vma);
+@@ -4551,17 +4869,97 @@ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
+ 		folio = vma_alloc_folio(gfp, order, vma, addr);
+ 		if (folio) {
+ 			if (!mem_cgroup_swapin_charge_folio(folio, vma->vm_mm,
+-							    gfp, entry))
++							    gfp, entry)) {
++				if (order == MTHP_EXP_ORDER2)
++					mthp_exp_inc(MTHP_EXP_SWPIN_ORDER2_ALLOC_SUCCESS);
+ 				return folio;
++			}
++			if (order == MTHP_EXP_ORDER2)
++				mthp_exp_inc(MTHP_EXP_SWPIN_ORDER2_CHARGE_FAIL);
+ 			count_mthp_stat(order, MTHP_STAT_SWPIN_FALLBACK_CHARGE);
+ 			folio_put(folio);
++		} else if (order == MTHP_EXP_ORDER2) {
++			mthp_exp_inc(MTHP_EXP_SWPIN_ORDER2_ALLOC_FAIL);
+ 		}
+ 		count_mthp_stat(order, MTHP_STAT_SWPIN_FALLBACK);
+ 		order = next_order(&orders, order);
+ 	}
+ 
+ fallback:
++	mthp_exp_inc(MTHP_EXP_SWPIN_SYNC_ORDER0_FALLBACK);
+ 	return __alloc_swap_folio(vmf);
++fallback_uffd:
++	mthp_exp_fill_order_masks(vma, requested_orders, allowable_orders,
++				  suitable_orders, &masks);
++	trace_swpin_fallback(vma, vmf->address, entry, MTHP_EXP_FB_UFFD_ARMED,
++			     MTHP_EXP_SUB_NONE, &masks);
++	mthp_exp_inc(MTHP_EXP_SWPIN_SYNC_FALLBACK_UFFD);
++	goto fallback;
++fallback_zswap_guard:
++	mthp_exp_fill_order_masks(vma, requested_orders, allowable_orders,
++				  suitable_orders, &masks);
++	trace_swpin_fallback(vma, vmf->address, entry, MTHP_EXP_FB_ZSWAP_GUARD,
++			     MTHP_EXP_SUB_NONE, &masks);
++	mthp_exp_inc(MTHP_EXP_SWPIN_SYNC_FALLBACK_ZSWAP_GUARD);
++	goto fallback;
++fallback_no_orders_allowable:
++	subreason = count_mthp_allowable_order2_reason(vma, requested_orders,
++						       true);
++	mthp_exp_fill_order_masks(vma, requested_orders, allowable_orders,
++				  suitable_orders, &masks);
++	trace_swpin_fallback(vma, vmf->address, entry,
++			     MTHP_EXP_FB_NO_ORDERS_ALLOWABLE, subreason,
++			     &masks);
++	mthp_exp_inc(MTHP_EXP_SWPIN_SYNC_FALLBACK_NO_ORDERS_ALLOWABLE);
++	goto fallback_no_orders;
++fallback_no_orders_vma_suitable:
++	subreason = count_mthp_suitable_order2_reason(vma, vmf->address,
++						      true);
++	mthp_exp_fill_order_masks(vma, requested_orders, allowable_orders,
++				  suitable_orders, &masks);
++	trace_swpin_fallback(vma, vmf->address, entry,
++			     MTHP_EXP_FB_NO_ORDERS_SUITABLE, subreason,
++			     &masks);
++	mthp_exp_inc(MTHP_EXP_SWPIN_SYNC_FALLBACK_NO_ORDERS_VMA_SUITABLE);
++	goto fallback_no_orders;
++fallback_no_orders_swap_suitable:
++	subreason = count_swpin_swap_suitable_order2_reason(swp_offset(entry),
++							    vmf->address,
++							    suitable_orders);
++	mthp_exp_fill_order_masks(vma, requested_orders, allowable_orders,
++				  suitable_orders, &masks);
++	trace_swpin_fallback(vma, vmf->address, entry,
++			     MTHP_EXP_FB_NO_ORDERS_SWAP_SUITABLE, subreason,
++			     &masks);
++	if (subreason == MTHP_EXP_SUB_ORDER2_SWAP_OFFSET_MISMATCH) {
++		mismatch_class = mthp_exp_classify_swap_mismatch(entry, vma,
++								  vmf->address,
++								  &birth);
++		trace_mm_mthp_swapin_offset_mismatch_birth(vma, vmf->address,
++							   entry,
++							   mismatch_class,
++							   &birth);
++	}
++	mthp_exp_inc(MTHP_EXP_SWPIN_SYNC_FALLBACK_NO_ORDERS_SWAP_SUITABLE);
++	goto fallback_no_orders;
++fallback_no_orders:
++	mthp_exp_inc(MTHP_EXP_SWPIN_SYNC_FALLBACK_NO_ORDERS);
++	goto fallback;
++fallback_pte_map:
++	mthp_exp_fill_order_masks(vma, requested_orders, allowable_orders,
++				  suitable_orders, &masks);
++	trace_swpin_fallback(vma, vmf->address, entry, MTHP_EXP_FB_PTE_MAP,
++			     MTHP_EXP_SUB_NONE, &masks);
++	mthp_exp_inc(MTHP_EXP_SWPIN_SYNC_FALLBACK_PTE_MAP);
++	goto fallback;
++fallback_can_swapin_thp:
++	mthp_exp_fill_order_masks(vma, requested_orders, allowable_orders,
++				  suitable_orders, &masks);
++	trace_swpin_fallback(vma, vmf->address, entry,
++			     MTHP_EXP_FB_CAN_SWAPIN_THP, MTHP_EXP_SUB_NONE,
++			     &masks);
++	mthp_exp_inc(MTHP_EXP_SWPIN_SYNC_FALLBACK_CAN_SWAPIN_THP);
++	goto fallback;
+ }
+ #else /* !CONFIG_TRANSPARENT_HUGEPAGE */
+ static struct folio *alloc_swap_folio(struct vm_fault *vmf)
+@@ -4662,14 +5060,17 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
+ 		goto out;
+ 
+ 	folio = swap_cache_get_folio(entry);
+-	if (folio)
++	if (folio) {
++		mthp_exp_inc(MTHP_EXP_SWPIN_SWAPCACHE_HIT);
+ 		swap_update_readahead(folio, vma, vmf->address);
++	}
+ 	swapcache = folio;
+ 
+ 	if (!folio) {
+ 		if (data_race(si->flags & SWP_SYNCHRONOUS_IO) &&
+ 		    __swap_count(entry) == 1) {
+ 			/* skip swapcache */
++			mthp_exp_inc(MTHP_EXP_SWPIN_SYNCHRONOUS_PATH);
+ 			folio = alloc_swap_folio(vmf);
+ 			if (folio) {
+ 				__folio_set_locked(folio);
+@@ -4712,6 +5113,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
+ 				folio->private = NULL;
+ 			}
+ 		} else {
++			mthp_exp_inc(MTHP_EXP_SWPIN_READAHEAD_PATH);
+ 			folio = swapin_readahead(entry, GFP_HIGHUSER_MOVABLE,
+ 						vmf);
+ 			swapcache = folio;
+@@ -5045,20 +5447,29 @@ static bool pte_range_none(pte_t *pte, int nr_pages)
+ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
+ {
+ 	struct vm_area_struct *vma = vmf->vma;
++	struct folio *folio;
+ #ifdef CONFIG_TRANSPARENT_HUGEPAGE
+ 	unsigned long orders;
+-	struct folio *folio;
++	unsigned long requested_orders = BIT(PMD_ORDER) - 1;
++	unsigned long allowable_orders = 0;
++	unsigned long suitable_orders = 0;
+ 	unsigned long addr;
++	struct mthp_exp_trace_info masks;
+ 	pte_t *pte;
+ 	gfp_t gfp;
++	unsigned int fallback_reason = MTHP_EXP_FB_ALL_ORDERS_FAILED;
++	unsigned int fallback_subreason = MTHP_EXP_SUB_NONE;
+ 	int order;
+ 
+ 	/*
+ 	 * If uffd is active for the vma we need per-page fault fidelity to
+ 	 * maintain the uffd semantics.
+ 	 */
+-	if (unlikely(userfaultfd_armed(vma)))
++	if (unlikely(userfaultfd_armed(vma))) {
++		mthp_exp_inc(MTHP_EXP_ANON_FAULT_FALLBACK_UFFD_ARMED);
++		fallback_reason = MTHP_EXP_FB_UFFD_ARMED;
+ 		goto fallback;
++	}
+ 
+ 	/*
+ 	 * Get a list of all the (large) orders below PMD_ORDER that are enabled
+@@ -5066,11 +5477,26 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
+ 	 * the faulting address and still be fully contained in the vma.
+ 	 */
+ 	orders = thp_vma_allowable_orders(vma, vma->vm_flags, TVA_PAGEFAULT,
+-					  BIT(PMD_ORDER) - 1);
++					  requested_orders);
++	if (!orders) {
++		fallback_subreason = count_mthp_allowable_order2_reason(vma,
++					requested_orders, false);
++		mthp_exp_inc(MTHP_EXP_ANON_FAULT_FALLBACK_NO_ORDERS_ALLOWABLE);
++		fallback_reason = MTHP_EXP_FB_NO_ORDERS_ALLOWABLE;
++		goto fallback;
++	}
++	allowable_orders = orders;
++
+ 	orders = thp_vma_suitable_orders(vma, vmf->address, orders);
+ 
+-	if (!orders)
++	if (!orders) {
++		fallback_subreason = count_mthp_suitable_order2_reason(vma,
++					vmf->address, false);
++		mthp_exp_inc(MTHP_EXP_ANON_FAULT_FALLBACK_NO_ORDERS_SUITABLE);
++		fallback_reason = MTHP_EXP_FB_NO_ORDERS_SUITABLE;
+ 		goto fallback;
++	}
++	suitable_orders = orders;
+ 
+ 	pte = pte_offset_map(vmf->pmd, vmf->address & PMD_MASK);
+ 	if (!pte)
+@@ -5091,8 +5517,11 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
+ 
+ 	pte_unmap(pte);
+ 
+-	if (!orders)
++	if (!orders) {
++		mthp_exp_inc(MTHP_EXP_ANON_FAULT_FALLBACK_PTE_RANGE_OCCUPIED);
++		fallback_reason = MTHP_EXP_FB_PTE_RANGE_OCCUPIED;
+ 		goto fallback;
++	}
+ 
+ 	/* Try allocating the highest of the remaining orders. */
+ 	gfp = vma_thp_gfp_mask(vma);
+@@ -5101,6 +5530,7 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
+ 		folio = vma_alloc_folio(gfp, order, vma, addr);
+ 		if (folio) {
+ 			if (mem_cgroup_charge(folio, vma->vm_mm, gfp)) {
++				mthp_exp_inc(MTHP_EXP_ANON_FAULT_FALLBACK_CHARGE_FAIL);
+ 				count_mthp_stat(order, MTHP_STAT_ANON_FAULT_FALLBACK_CHARGE);
+ 				folio_put(folio);
+ 				goto next;
+@@ -5116,6 +5546,8 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
+ 			if (user_alloc_needs_zeroing())
+ 				folio_zero_user(folio, vmf->address);
+ 			return folio;
++		} else {
++			mthp_exp_inc(MTHP_EXP_ANON_FAULT_FALLBACK_ALLOC_FAIL);
+ 		}
+ next:
+ 		count_mthp_stat(order, MTHP_STAT_ANON_FAULT_FALLBACK);
+@@ -5123,8 +5555,22 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
+ 	}
+ 
+ fallback:
++	mthp_exp_inc(MTHP_EXP_ANON_FAULT_SINGLE_PAGE_FALLBACK);
++	if (fallback_reason == MTHP_EXP_FB_ALL_ORDERS_FAILED)
++		mthp_exp_inc(MTHP_EXP_ANON_FAULT_FALLBACK_ALL_ORDERS_FAILED);
++	mthp_exp_fill_order_masks(vma, requested_orders, allowable_orders,
++				  suitable_orders, &masks);
++	trace_anon_fault_fallback(vma, vmf->address, fallback_reason,
++				  fallback_subreason, &masks);
+ #endif
+-	return folio_prealloc(vma->vm_mm, vma, vmf->address, true);
++	folio = folio_prealloc(vma->vm_mm, vma, vmf->address, true);
++#ifdef CONFIG_TRANSPARENT_HUGEPAGE
++	if (folio && !IS_ERR(folio))
++		mthp_exp_record_folio_origin(folio,
++			mthp_exp_anon_fallback_origin(fallback_reason),
++			fallback_subreason, vma, vmf->address);
++#endif
++	return folio;
+ }
+ 
+ /*
+diff --git a/mm/mremap.c b/mm/mremap.c
+index 419a0ea0a8708adc41c0f8e81e8d078194b088e7..a7fd7ebf4092a4137ba7e37f1132f50b6b468d41 100644
+--- a/mm/mremap.c
++++ b/mm/mremap.c
+@@ -25,6 +25,7 @@
+ #include <linux/uaccess.h>
+ #include <linux/userfaultfd_k.h>
+ #include <linux/mempolicy.h>
++#include <linux/mthp_experiment.h>
+ 
+ #include <asm/cacheflush.h>
+ #include <asm/tlb.h>
+@@ -267,6 +268,14 @@ static int move_ptes(struct pagetable_move_control *pmc,
+ 		old_pte = ptep_get(old_ptep);
+ 		if (pte_none(old_pte))
+ 			continue;
++		if (!pte_present(old_pte) && is_swap_pte(old_pte)) {
++			swp_entry_t old_entry = pte_to_swp_entry(old_pte);
++
++			if (!non_swap_entry(old_entry))
++				mthp_exp_record_swap_pte_transfer(old_entry,
++					MTHP_EXP_TRANSFER_MREMAP_MOVE_PTES,
++					mm, mm, old_addr, new_addr);
++		}
+ 
+ 		/*
+ 		 * If we are remapping a valid PTE, make sure
+diff --git a/mm/page_alloc.c b/mm/page_alloc.c
+index 7dd4757a518b9201831073a768104df40e0a402d..c7acb8e5d1fbad6fe69be8362bfffb94954674d3 100644
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -283,6 +283,16 @@ const char * const migratetype_names[MIGRATE_TYPES] = {
+ #endif
+ };
+ 
++static DEFINE_PER_CPU(unsigned long, page_alloc_order0_counts[MIGRATE_TYPES]);
++
++static void count_page_alloc_order0(int migratetype)
++{
++	if (migratetype < 0 || migratetype >= MIGRATE_TYPES)
++		migratetype = MIGRATE_UNMOVABLE;
++
++	this_cpu_inc(page_alloc_order0_counts[migratetype]);
++}
++
+ int min_free_kbytes = 1024;
+ int user_min_free_kbytes = -1;
+ static int watermark_boost_factor __read_mostly = 15000;
+@@ -5147,6 +5157,8 @@ unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
+ 		nr_account++;
+ 
+ 		prep_new_page(page, 0, gfp, 0);
++		count_page_alloc_order0(ac.migratetype);
++		trace_mm_page_alloc(page, 0, gfp, ac.migratetype);
+ 		set_page_refcounted(page);
+ 		page_array[nr_populated++] = page;
+ 	}
+@@ -5232,7 +5244,10 @@ struct page *__alloc_frozen_pages_noprof(gfp_t gfp, unsigned int order,
+ 		page = NULL;
+ 	}
+ 
+-	trace_mm_page_alloc(page, order, alloc_gfp, ac.migratetype);
++	if (order == 0 && page) {
++		count_page_alloc_order0(ac.migratetype);
++		trace_mm_page_alloc(page, order, alloc_gfp, ac.migratetype);
++	}
+ 	kmsan_alloc_page(page, order, alloc_gfp);
+ 
+ 	return page;
+@@ -7639,7 +7654,10 @@ struct page *alloc_frozen_pages_nolock_noprof(gfp_t gfp_flags, int nid, unsigned
+ 		__free_frozen_pages(page, order, FPI_TRYLOCK);
+ 		page = NULL;
+ 	}
+-	trace_mm_page_alloc(page, order, alloc_gfp, ac.migratetype);
++	if (order == 0 && page) {
++		count_page_alloc_order0(ac.migratetype);
++		trace_mm_page_alloc(page, order, alloc_gfp, ac.migratetype);
++	}
+ 	kmsan_alloc_page(page, order, alloc_gfp);
+ 	return page;
+ }
+@@ -7701,10 +7719,41 @@ static const struct file_operations alloc_fail_fops = {
+ 	.release = single_release,
+ };
+ 
++static int page_alloc_order0_show(struct seq_file *m, void *v)
++{
++	unsigned long totals[MIGRATE_TYPES] = {0};
++	int cpu, i;
++
++	for_each_possible_cpu(cpu)
++		for (i = 0; i < MIGRATE_TYPES; i++)
++			totals[i] += per_cpu(page_alloc_order0_counts[i], cpu);
++
++	for (i = 0; i < MIGRATE_TYPES; i++)
++		seq_printf(m, "page_alloc_order0_migrate_%s %lu\n",
++			   migratetype_names[i], totals[i]);
++
++	return 0;
++}
++
++static int page_alloc_order0_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, page_alloc_order0_show, NULL);
++}
++
++static const struct file_operations page_alloc_order0_fops = {
++	.owner = THIS_MODULE,
++	.open  = page_alloc_order0_open,
++	.read  = seq_read,
++	.llseek = seq_lseek,
++	.release = single_release,
++};
++
+ static int __init alloc_fail_debugfs_init(void)
+ {
+ 	debugfs_create_file("alloc_fail_reasons", 0400, NULL, NULL,
+ 			    &alloc_fail_fops);
++	debugfs_create_file("page_alloc_order0_migratetype", 0400, NULL, NULL,
++			    &page_alloc_order0_fops);
+ 	return 0;
+ }
+ late_initcall(alloc_fail_debugfs_init);
+diff --git a/mm/rmap.c b/mm/rmap.c
+index 3cae831646c6d38f7ae96cab838a786d5a6b38e4..249b63891c8d9405a60d6d57d7a507322582160c 100644
+--- a/mm/rmap.c
++++ b/mm/rmap.c
+@@ -77,6 +77,7 @@
+ #include <linux/userfaultfd_k.h>
+ #include <linux/mm_inline.h>
+ #include <linux/oom.h>
++#include <linux/mthp_experiment.h>
+ 
+ #include <asm/tlbflush.h>
+ 
+@@ -2209,6 +2210,8 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
+ 				if (pte_swp_uffd_wp(pteval))
+ 					swp_pte = pte_swp_mkuffd_wp(swp_pte);
+ 			}
++			mthp_exp_record_swap_pte_birth(entry, folio, subpage,
++						       vma, address);
+ 			set_pte_at(mm, address, pvmw.pte, swp_pte);
+ 		} else {
+ 			/*
+diff --git a/mm/shmem.c b/mm/shmem.c
+index ab24d671c2dda6f9fed4fd534b4f5d842f7a6bfb..d38d5c382715c7444062c56abff1a393b42655bd 100644
+--- a/mm/shmem.c
++++ b/mm/shmem.c
+@@ -36,6 +36,7 @@
+ #include <linux/shmem_fs.h>
+ #include <linux/swap.h>
+ #include <linux/huge_mm.h>
++#include <linux/mthp_experiment.h>
+ #include <linux/percpu.h>
+ #include <linux/uio.h>
+ #include <linux/hugetlb.h>
+@@ -43,8 +44,18 @@
+ #include <linux/swapfile.h>
+ #include <linux/iversion.h>
+ #include <linux/unicode.h>
++#include <trace/events/huge_memory.h>
+ #include "swap.h"
+ 
++#define MTHP_UFFD_MFILL_COPY		1
++#define MTHP_UFFD_MFILL_ZEROPAGE	2
++#define MTHP_UFFD_MFILL_CONTINUE	3
++#define MTHP_UFFD_MFILL_POISON		4
++
++#define MTHP_UFFD_STAGE_ENTRY		1
++#define MTHP_UFFD_STAGE_INSTALL_PTE	2
++#define MTHP_UFFD_STAGE_COPY_RETRY	3
++
+ static struct vfsmount *shm_mnt __ro_after_init;
+ 
+ #ifdef CONFIG_SHMEM
+@@ -3171,8 +3182,26 @@ int shmem_mfill_atomic_pte(pmd_t *dst_pmd,
+ 	struct folio *folio;
+ 	int ret;
+ 	pgoff_t max_off;
++	bool is_copy = uffd_flags_mode_is(flags, MFILL_ATOMIC_COPY);
++	bool is_zeropage = uffd_flags_mode_is(flags, MFILL_ATOMIC_ZEROPAGE);
++
++	if (is_copy) {
++		mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_COPY_TOTAL);
++		trace_mm_mthp_uffd_mfill(dst_vma, dst_addr, src_addr,
++					 MTHP_UFFD_MFILL_COPY, 0,
++					 MTHP_UFFD_STAGE_ENTRY, 1);
++	} else if (is_zeropage) {
++		mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_ZEROPAGE_TOTAL);
++		trace_mm_mthp_uffd_mfill(dst_vma, dst_addr, src_addr,
++					 MTHP_UFFD_MFILL_ZEROPAGE, 0,
++					 MTHP_UFFD_STAGE_ENTRY, 1);
++	}
+ 
+ 	if (shmem_inode_acct_blocks(inode, 1)) {
++		if (is_copy)
++			mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_COPY_ACCT_FAIL);
++		else if (is_zeropage)
++			mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_ZEROPAGE_ACCT_FAIL);
+ 		/*
+ 		 * We may have got a page, returned -ENOENT triggering a retry,
+ 		 * and now we find ourselves with -ENOMEM. Release the page, to
+@@ -3188,10 +3217,15 @@ int shmem_mfill_atomic_pte(pmd_t *dst_pmd,
+ 	if (!*foliop) {
+ 		ret = -ENOMEM;
+ 		folio = shmem_alloc_folio(gfp, 0, info, pgoff);
+-		if (!folio)
++		if (!folio) {
++			if (is_copy)
++				mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_COPY_ALLOC_FAIL);
++			else if (is_zeropage)
++				mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_ZEROPAGE_ALLOC_FAIL);
+ 			goto out_unacct_blocks;
++		}
+ 
+-		if (uffd_flags_mode_is(flags, MFILL_ATOMIC_COPY)) {
++		if (is_copy) {
+ 			page_kaddr = kmap_local_folio(folio, 0);
+ 			/*
+ 			 * The read mmap_lock is held here.  Despite the
+@@ -3217,6 +3251,13 @@ int shmem_mfill_atomic_pte(pmd_t *dst_pmd,
+ 
+ 			/* fallback to copy_from_user outside mmap_lock */
+ 			if (unlikely(ret)) {
++				mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_COPY_USER_RETRY);
++				trace_mm_mthp_uffd_mfill(dst_vma, dst_addr,
++							 src_addr,
++							 MTHP_UFFD_MFILL_COPY,
++							 -ENOENT,
++							 MTHP_UFFD_STAGE_COPY_RETRY,
++							 1);
+ 				*foliop = folio;
+ 				ret = -ENOENT;
+ 				/* don't free the page */
+@@ -3241,23 +3282,51 @@ int shmem_mfill_atomic_pte(pmd_t *dst_pmd,
+ 
+ 	ret = -EFAULT;
+ 	max_off = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
+-	if (unlikely(pgoff >= max_off))
++	if (unlikely(pgoff >= max_off)) {
++		if (is_copy)
++			mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_COPY_EOF_FAIL);
++		else if (is_zeropage)
++			mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_ZEROPAGE_EOF_FAIL);
+ 		goto out_release;
++	}
+ 
+ 	ret = mem_cgroup_charge(folio, dst_vma->vm_mm, gfp);
+-	if (ret)
++	if (ret) {
++		if (is_copy)
++			mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_COPY_CHARGE_FAIL);
++		else if (is_zeropage)
++			mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_ZEROPAGE_CHARGE_FAIL);
+ 		goto out_release;
++	}
+ 	ret = shmem_add_to_page_cache(folio, mapping, pgoff, NULL, gfp);
+-	if (ret)
++	if (ret) {
++		if (is_copy)
++			mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_COPY_PAGECACHE_FAIL);
++		else if (is_zeropage)
++			mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_ZEROPAGE_PAGECACHE_FAIL);
+ 		goto out_release;
++	}
+ 
+ 	ret = mfill_atomic_install_pte(dst_pmd, dst_vma, dst_addr,
+ 				       &folio->page, true, flags);
+-	if (ret)
++	trace_mm_mthp_uffd_mfill(dst_vma, dst_addr, src_addr,
++				 is_copy ? MTHP_UFFD_MFILL_COPY :
++				 MTHP_UFFD_MFILL_ZEROPAGE, ret,
++				 MTHP_UFFD_STAGE_INSTALL_PTE, 1);
++	if (ret) {
++		if (is_copy)
++			mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_COPY_PTE_INSTALL_FAIL);
++		else if (is_zeropage)
++			mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_ZEROPAGE_PTE_INSTALL_FAIL);
+ 		goto out_delete_from_cache;
++	}
+ 
+ 	shmem_recalc_inode(inode, 1, 0);
+ 	folio_unlock(folio);
++	if (is_copy)
++		mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_COPY_SUCCESS);
++	else if (is_zeropage)
++		mthp_exp_inc(MTHP_EXP_UFFD_MFILL_SHMEM_ZEROPAGE_SUCCESS);
+ 	return 0;
+ out_delete_from_cache:
+ 	filemap_remove_folio(folio);
+diff --git a/mm/swap_state.c b/mm/swap_state.c
+index f4980dde5394b53c86d1ef512367a1f1fee86bc0..00ae11bb35955b35f210e57110c1e7b2f5864072 100644
+--- a/mm/swap_state.c
++++ b/mm/swap_state.c
+@@ -22,6 +22,7 @@
+ #include <linux/vmalloc.h>
+ #include <linux/huge_mm.h>
+ #include <linux/shmem_fs.h>
++#include <linux/mthp_experiment.h>
+ #include "internal.h"
+ #include "swap_table.h"
+ #include "swap.h"
+@@ -440,6 +441,7 @@ struct folio *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
+ 			new_folio = folio_alloc_mpol(gfp_mask, 0, mpol, ilx, numa_node_id());
+ 			if (!new_folio)
+ 				goto put_and_return;
++			mthp_exp_inc(MTHP_EXP_SWPIN_READ_SWAP_CACHE_ASYNC_ORDER0_ALLOC);
+ 		}
+ 
+ 		/*
+diff --git a/mm/swapfile.c b/mm/swapfile.c
+index a17bdc2456e930344276f2b34173b35d8959a9d2..cb1268e35cea35d9786d9819125ec239e43119b7 100644
+--- a/mm/swapfile.c
++++ b/mm/swapfile.c
+@@ -33,6 +33,7 @@
+ #include <linux/capability.h>
+ #include <linux/syscalls.h>
+ #include <linux/memcontrol.h>
++#include <linux/mthp_experiment.h>
+ #include <linux/poll.h>
+ #include <linux/oom.h>
+ #include <linux/swapfile.h>
+@@ -50,6 +51,59 @@
+ #include "internal.h"
+ #include "swap.h"
+ 
++static void mthp_exp_inc_swapout_order2_offset_mod(unsigned long offset)
++{
++	switch (offset & 3) {
++	case 0:
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER2_ALLOC_OFFSET_MOD0);
++		break;
++	case 1:
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER2_ALLOC_OFFSET_MOD1);
++		break;
++	case 2:
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER2_ALLOC_OFFSET_MOD2);
++		break;
++	default:
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER2_ALLOC_OFFSET_MOD3);
++		break;
++	}
++}
++
++static void mthp_exp_inc_swapout_order0_steal(int order)
++{
++	mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER0_STEAL_HIGHER);
++
++	switch (order) {
++	case 1:
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER0_STEAL_FROM_ORDER1);
++		break;
++	case 2:
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER0_STEAL_FROM_ORDER2);
++		break;
++	case 3:
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER0_STEAL_FROM_ORDER3);
++		break;
++	case 4:
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER0_STEAL_FROM_ORDER4);
++		break;
++	case 5:
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER0_STEAL_FROM_ORDER5);
++		break;
++	case 6:
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER0_STEAL_FROM_ORDER6);
++		break;
++	case 7:
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER0_STEAL_FROM_ORDER7);
++		break;
++	case 8:
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER0_STEAL_FROM_ORDER8);
++		break;
++	default:
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER0_STEAL_FROM_ORDER9);
++		break;
++	}
++}
++
+ static bool swap_count_continued(struct swap_info_struct *, pgoff_t,
+ 				 unsigned char);
+ static void free_swap_count_continuations(struct swap_info_struct *);
+@@ -1119,13 +1173,17 @@ static unsigned long cluster_alloc_swap_entry(struct swap_info_struct *si, int o
+ 		 */
+ 		found = alloc_swap_scan_list(si, &si->frag_clusters[o],
+ 					     0, usage, true);
+-		if (found)
++		if (found) {
++			mthp_exp_inc_swapout_order0_steal(o);
+ 			goto done;
++		}
+ 
+ 		found = alloc_swap_scan_list(si, &si->nonfull_clusters[o],
+ 					     0, usage, true);
+-		if (found)
++		if (found) {
++			mthp_exp_inc_swapout_order0_steal(o);
+ 			goto done;
++		}
+ 	}
+ done:
+ 	if (!(si->flags & SWP_SOLIDSTATE))
+@@ -1432,17 +1490,31 @@ int folio_alloc_swap(struct folio *folio, gfp_t gfp)
+ 		}
+ 	}
+ 
++	if (order == 2)
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER2_ALLOC_ATTEMPT);
++
+ 	local_lock(&percpu_swap_cluster.lock);
+ 	if (!swap_alloc_fast(&entry, order))
+ 		swap_alloc_slow(&entry, order);
+ 	local_unlock(&percpu_swap_cluster.lock);
+ 
+ 	/* Need to call this even if allocation failed, for MEMCG_SWAP_FAIL. */
+-	if (mem_cgroup_try_charge_swap(folio, entry))
++	if (mem_cgroup_try_charge_swap(folio, entry)) {
++		if (order == 2)
++			mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER2_ALLOC_MEMCG_FAIL);
+ 		goto out_free;
++	}
+ 
+-	if (!entry.val)
++	if (!entry.val) {
++		if (order == 2)
++			mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER2_ALLOC_FAIL);
+ 		return -ENOMEM;
++	}
++
++	if (order == 2) {
++		mthp_exp_inc(MTHP_EXP_SWAPOUT_ORDER2_ALLOC_SUCCESS);
++		mthp_exp_inc_swapout_order2_offset_mod(swp_offset(entry));
++	}
+ 
+ 	swap_cache_add_folio(folio, entry, NULL);
+ 
+diff --git a/mm/userfaultfd.c b/mm/userfaultfd.c
+index 50b4d3b12b664896b06a8b8794a9259502778f5a..122c720871c04915cf289e68caaf2045d4023408 100644
+--- a/mm/userfaultfd.c
++++ b/mm/userfaultfd.c
+@@ -14,14 +14,25 @@
+ #include <linux/swap.h>
+ #include <linux/swapops.h>
+ #include <linux/userfaultfd_k.h>
++#include <linux/mthp_experiment.h>
+ #include <linux/mmu_notifier.h>
+ #include <linux/hugetlb.h>
+ #include <linux/shmem_fs.h>
++#include <trace/events/huge_memory.h>
+ #include <asm/tlbflush.h>
+ #include <asm/tlb.h>
+ #include "internal.h"
+ #include "swap.h"
+ 
++#define MTHP_UFFD_MFILL_COPY		1
++#define MTHP_UFFD_MFILL_ZEROPAGE	2
++#define MTHP_UFFD_MFILL_CONTINUE	3
++#define MTHP_UFFD_MFILL_POISON		4
++
++#define MTHP_UFFD_STAGE_ENTRY		1
++#define MTHP_UFFD_STAGE_INSTALL_PTE	2
++#define MTHP_UFFD_STAGE_COPY_RETRY	3
++
+ static __always_inline
+ bool validate_dst_vma(struct vm_area_struct *dst_vma, unsigned long dst_end)
+ {
+@@ -247,6 +258,7 @@ static int mfill_atomic_pte_copy(pmd_t *dst_pmd,
+ 	int ret;
+ 	struct folio *folio;
+ 
++	mthp_exp_inc(MTHP_EXP_UFFD_MFILL_COPY_ORDER0);
+ 	if (!*foliop) {
+ 		ret = -ENOMEM;
+ 		folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE, 0, dst_vma,
+@@ -303,8 +315,13 @@ static int mfill_atomic_pte_copy(pmd_t *dst_pmd,
+ 
+ 	ret = mfill_atomic_install_pte(dst_pmd, dst_vma, dst_addr,
+ 				       &folio->page, true, flags);
++	trace_mm_mthp_uffd_mfill(dst_vma, dst_addr, src_addr,
++				 MTHP_UFFD_MFILL_COPY, ret,
++				 MTHP_UFFD_STAGE_INSTALL_PTE, 0);
+ 	if (ret)
+ 		goto out_release;
++	mthp_exp_record_folio_origin(folio, MTHP_EXP_ORIGIN_UFFD_COPY, 0,
++				     dst_vma, dst_addr);
+ out:
+ 	return ret;
+ out_release:
+@@ -319,6 +336,7 @@ static int mfill_atomic_pte_zeroed_folio(pmd_t *dst_pmd,
+ 	struct folio *folio;
+ 	int ret = -ENOMEM;
+ 
++	mthp_exp_inc(MTHP_EXP_UFFD_MFILL_ZEROPAGE_ZEROED_FOLIO);
+ 	folio = vma_alloc_zeroed_movable_folio(dst_vma, dst_addr);
+ 	if (!folio)
+ 		return ret;
+@@ -335,8 +353,13 @@ static int mfill_atomic_pte_zeroed_folio(pmd_t *dst_pmd,
+ 
+ 	ret = mfill_atomic_install_pte(dst_pmd, dst_vma, dst_addr,
+ 				       &folio->page, true, 0);
++	trace_mm_mthp_uffd_mfill(dst_vma, dst_addr, 0,
++				 MTHP_UFFD_MFILL_ZEROPAGE, ret,
++				 MTHP_UFFD_STAGE_INSTALL_PTE, 0);
+ 	if (ret)
+ 		goto out_put;
++	mthp_exp_record_folio_origin(folio, MTHP_EXP_ORIGIN_UFFD_ZEROPAGE, 0,
++				     dst_vma, dst_addr);
+ 
+ 	return 0;
+ out_put:
+@@ -352,8 +375,10 @@ static int mfill_atomic_pte_zeropage(pmd_t *dst_pmd,
+ 	spinlock_t *ptl;
+ 	int ret;
+ 
++	mthp_exp_inc(MTHP_EXP_UFFD_MFILL_ZEROPAGE_TOTAL);
+ 	if (mm_forbids_zeropage(dst_vma->vm_mm))
+ 		return mfill_atomic_pte_zeroed_folio(dst_pmd, dst_vma, dst_addr);
++	mthp_exp_inc(MTHP_EXP_UFFD_MFILL_ZEROPAGE_ZERO_PFN);
+ 
+ 	_dst_pte = pte_mkspecial(pfn_pte(my_zero_pfn(dst_addr),
+ 					 dst_vma->vm_page_prot));
+@@ -375,6 +400,9 @@ static int mfill_atomic_pte_zeropage(pmd_t *dst_pmd,
+ out_unlock:
+ 	pte_unmap_unlock(dst_pte, ptl);
+ out:
++	trace_mm_mthp_uffd_mfill(dst_vma, dst_addr, 0,
++				 MTHP_UFFD_MFILL_ZEROPAGE, ret,
++				 MTHP_UFFD_STAGE_INSTALL_PTE, 0);
+ 	return ret;
+ }
+ 
+@@ -409,6 +437,9 @@ static int mfill_atomic_pte_continue(pmd_t *dst_pmd,
+ 
+ 	ret = mfill_atomic_install_pte(dst_pmd, dst_vma, dst_addr,
+ 				       page, false, flags);
++	trace_mm_mthp_uffd_mfill(dst_vma, dst_addr, 0,
++				 MTHP_UFFD_MFILL_CONTINUE, ret,
++				 MTHP_UFFD_STAGE_INSTALL_PTE, 0);
+ 	if (ret)
+ 		goto out_release;
+ 
+@@ -662,9 +693,16 @@ static __always_inline ssize_t mfill_atomic_pte(pmd_t *dst_pmd,
+ 	ssize_t err;
+ 
+ 	if (uffd_flags_mode_is(flags, MFILL_ATOMIC_CONTINUE)) {
++		mthp_exp_inc(MTHP_EXP_UFFD_MFILL_CONTINUE_TOTAL);
++		trace_mm_mthp_uffd_mfill(dst_vma, dst_addr, src_addr,
++					 MTHP_UFFD_MFILL_CONTINUE, 0,
++					 MTHP_UFFD_STAGE_ENTRY, 0);
+ 		return mfill_atomic_pte_continue(dst_pmd, dst_vma,
+ 						 dst_addr, flags);
+ 	} else if (uffd_flags_mode_is(flags, MFILL_ATOMIC_POISON)) {
++		trace_mm_mthp_uffd_mfill(dst_vma, dst_addr, src_addr,
++					 MTHP_UFFD_MFILL_POISON, 0,
++					 MTHP_UFFD_STAGE_ENTRY, 0);
+ 		return mfill_atomic_pte_poison(dst_pmd, dst_vma,
+ 					       dst_addr, flags);
+ 	}
+@@ -680,13 +718,20 @@ static __always_inline ssize_t mfill_atomic_pte(pmd_t *dst_pmd,
+ 	 * and not in the radix tree.
+ 	 */
+ 	if (!(dst_vma->vm_flags & VM_SHARED)) {
+-		if (uffd_flags_mode_is(flags, MFILL_ATOMIC_COPY))
++		if (uffd_flags_mode_is(flags, MFILL_ATOMIC_COPY)) {
++			trace_mm_mthp_uffd_mfill(dst_vma, dst_addr, src_addr,
++						 MTHP_UFFD_MFILL_COPY, 0,
++						 MTHP_UFFD_STAGE_ENTRY, 0);
+ 			err = mfill_atomic_pte_copy(dst_pmd, dst_vma,
+ 						    dst_addr, src_addr,
+ 						    flags, foliop);
+-		else
++		} else {
++			trace_mm_mthp_uffd_mfill(dst_vma, dst_addr, src_addr,
++						 MTHP_UFFD_MFILL_ZEROPAGE, 0,
++						 MTHP_UFFD_STAGE_ENTRY, 0);
+ 			err = mfill_atomic_pte_zeropage(dst_pmd,
+ 						 dst_vma, dst_addr);
++		}
+ 	} else {
+ 		err = shmem_mfill_atomic_pte(dst_pmd, dst_vma,
+ 					     dst_addr, src_addr,
+@@ -811,15 +856,24 @@ static __always_inline ssize_t mfill_atomic(struct userfaultfd_ctx *ctx,
+ 		 * tables under us; pte_offset_map_lock() will deal with that.
+ 		 */
+ 
++		if (uffd_flags_mode_is(flags, MFILL_ATOMIC_COPY))
++			mthp_exp_inc(MTHP_EXP_UFFD_MFILL_COPY_TOTAL);
++
+ 		err = mfill_atomic_pte(dst_pmd, dst_vma, dst_addr,
+ 				       src_addr, flags, &folio);
+ 		cond_resched();
+ 
+-		if (unlikely(err == -ENOENT)) {
+-			void *kaddr;
+-
+-			up_read(&ctx->map_changing_lock);
+-			uffd_mfill_unlock(dst_vma);
++			if (unlikely(err == -ENOENT)) {
++				void *kaddr;
++
++				trace_mm_mthp_uffd_mfill(dst_vma, dst_addr,
++							 src_addr,
++							 MTHP_UFFD_MFILL_COPY,
++							 -ENOENT,
++							 MTHP_UFFD_STAGE_COPY_RETRY,
++							 vma_is_shmem(dst_vma));
++				up_read(&ctx->map_changing_lock);
++				uffd_mfill_unlock(dst_vma);
+ 			VM_WARN_ON_ONCE(!folio);
+ 
+ 			kaddr = kmap_local_folio(folio, 0);
+diff --git a/mm/vmscan.c b/mm/vmscan.c
+index 58b6e081fb1a1346831bc21ed1725351af1d5653..e78fea045756059632c345613df77e78a1592179 100644
+--- a/mm/vmscan.c
++++ b/mm/vmscan.c
+@@ -40,6 +40,7 @@
+ #include <linux/kthread.h>
+ #include <linux/freezer.h>
+ #include <linux/memcontrol.h>
++#include <linux/mthp_experiment.h>
+ #include <linux/migrate.h>
+ #include <linux/delayacct.h>
+ #include <linux/sysctl.h>
+@@ -1331,6 +1332,9 @@ static unsigned int shrink_folio_list(struct list_head *folio_list,
+ 					if (!folio_test_large(folio))
+ 						goto activate_locked_split;
+ 					/* Fallback to swap normal pages */
++					mthp_exp_inc(MTHP_EXP_SWAPOUT_LARGE_ALLOC_FAIL_SPLIT);
++					if (order == 2)
++						mthp_exp_inc(MTHP_EXP_SWAPOUT_LARGE_ALLOC_FAIL_SPLIT_ORDER2);
+ 					this_cpu_write(folio_split_reason, FSR_RECLAIM);
+ 					trace_mm_shrink_swap_split(folio);
+ 					if (split_folio_to_list(folio, folio_list))

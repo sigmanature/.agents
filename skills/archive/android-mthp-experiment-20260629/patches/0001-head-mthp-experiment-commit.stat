@@ -1,0 +1,13 @@
+700e6147efec (HEAD) 增加全部改动
+ include/linux/huge_mm.h            |  7 +++-
+ include/trace/events/huge_memory.h | 54 +++++++++++++++++++++----
+ include/trace/events/mmap.h        | 19 +++++++--
+ mm/huge_memory.c                   |  7 ++--
+ mm/khugepaged.c                    |  2 +-
+ mm/madvise.c                       | 48 +++++++++++++++++++++++
+ mm/mmap.c                          | 27 ++++++++++---
+ mm/page_alloc.c                    | 37 ++++++++++--------
+ mm/rmap.c                          |  2 +-
+ mm/vma.c                           | 80 +++++++++++++++++++++++++++++++++++---
+ mm/vma.h                           |  2 +-
+ 11 files changed, 239 insertions(+), 46 deletions(-)

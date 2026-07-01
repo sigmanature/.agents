@@ -1,0 +1,639 @@
+From 700e6147efec16084c99d190eebcd2bb04ebaf51 Mon Sep 17 00:00:00 2001
+From: Nanzhe Zhao <nzzhao@126.com>
+Date: Sat, 27 Jun 2026 10:13:45 +0800
+Subject: [PATCH] =?UTF-8?q?=E5=A2=9E=E5=8A=A0=E5=85=A8=E9=83=A8=E6=94=B9?=
+ =?UTF-8?q?=E5=8A=A8?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Change-Id: Ie04b1d633d5c77d7830b7888a53c4b75aef47a9d
+
+diff --git a/include/linux/huge_mm.h b/include/linux/huge_mm.h
+index 908564ea522e65d391a8173aefe524741f17c36b..45238518488aea5c16676863dad48ac730563a03 100644
+--- a/include/linux/huge_mm.h
++++ b/include/linux/huge_mm.h
+@@ -425,7 +425,8 @@ static inline int split_huge_page(struct page *page)
+ {
+ 	return split_huge_page_to_list_to_order(page, NULL, 0);
+ }
+-void deferred_split_folio(struct folio *folio, bool partially_mapped);
++void deferred_split_folio(struct folio *folio, bool partially_mapped,
++			  unsigned int reason, struct vm_area_struct *vma);
+ 
+ void __split_huge_pmd(struct vm_area_struct *vma, pmd_t *pmd,
+ 		unsigned long address, bool freeze);
+@@ -625,7 +626,9 @@ static inline int try_folio_split_to_order(struct folio *folio,
+ 	return -EINVAL;
+ }
+ 
+-static inline void deferred_split_folio(struct folio *folio, bool partially_mapped) {}
++static inline void deferred_split_folio(struct folio *folio, bool partially_mapped,
++					unsigned int reason,
++					struct vm_area_struct *vma) {}
+ #define split_huge_pmd(__vma, __pmd, __address)	\
+ 	do { } while (0)
+ 
+diff --git a/include/trace/events/huge_memory.h b/include/trace/events/huge_memory.h
+index 0a1d08d1f169ec930d91468923850d8751787809..9b36ddda828aee399c85281a3f7c7403fdc1301f 100644
+--- a/include/trace/events/huge_memory.h
++++ b/include/trace/events/huge_memory.h
+@@ -238,23 +238,46 @@ TRACE_EVENT(mm_khugepaged_collapse_file,
+ );
+ 
+ TRACE_EVENT(mm_folio_deferred_split,
+-	TP_PROTO(struct folio *folio, unsigned int reason),
+-	TP_ARGS(folio, reason),
++	TP_PROTO(struct folio *folio, unsigned int reason,
++		 struct vm_area_struct *vma),
++	TP_ARGS(folio, reason, vma),
+ 	TP_STRUCT__entry(
+ 		__field(unsigned long, pfn)
+ 		__field(unsigned int, order)
+ 		__field(unsigned int, reason)
++		__field(pid_t, pid)
++		__field(pid_t, tgid)
++		__array(char, comm, TASK_COMM_LEN)
++		__array(char, leader_comm, TASK_COMM_LEN)
++		__field(unsigned long, mm)
++		__field(unsigned long, vma_start)
++		__field(unsigned long, vma_end)
++		__string(vma_name, vma && anon_vma_name(vma) ?
++			 anon_vma_name(vma)->name : "")
+ 	),
+ 	TP_fast_assign(
+ 		__entry->pfn = folio_pfn(folio);
+ 		__entry->order = folio_order(folio);
+ 		__entry->reason = reason;
++		__entry->pid = current->pid;
++		__entry->tgid = current->tgid;
++		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
++		memcpy(__entry->leader_comm,
++		       current->group_leader ? current->group_leader->comm :
++		       current->comm, TASK_COMM_LEN);
++		__entry->mm = (unsigned long)(vma ? vma->vm_mm : current->mm);
++		__entry->vma_start = vma ? vma->vm_start : 0;
++		__entry->vma_end = vma ? vma->vm_end : 0;
++		__assign_str(vma_name);
+ 	),
+-	TP_printk("pfn=0x%lx order=%u reason=%s",
++	TP_printk("pfn=0x%lx order=%u reason=%s pid=%d tgid=%d comm=%s leader_comm=%s mm=0x%lx vma=[0x%lx-0x%lx] vma_name=\"%s\"",
+ 		__entry->pfn, __entry->order,
+ 		__print_symbolic(__entry->reason,
+ 			{ 0, "PARTIALLY_MAPPED" }, { 1, "ZAP" },
+-			{ 2, "KHUGEPAGED" }))
++			{ 2, "KHUGEPAGED" }),
++		__entry->pid, __entry->tgid, __entry->comm,
++		__entry->leader_comm, __entry->mm, __entry->vma_start,
++		__entry->vma_end, __get_str(vma_name))
+ );
+ 
+ TRACE_EVENT(mm_folio_split,
+@@ -293,20 +316,37 @@ TRACE_EVENT(mm_madvise_dontneed,
+ 		 unsigned long len),
+ 	TP_ARGS(vma, start, len),
+ 	TP_STRUCT__entry(
++		__field(pid_t, pid)
++		__field(pid_t, tgid)
++		__array(char, comm, TASK_COMM_LEN)
++		__array(char, leader_comm, TASK_COMM_LEN)
++		__field(unsigned long, mm)
+ 		__field(unsigned long, vma_start)
+ 		__field(unsigned long, vma_end)
+ 		__field(unsigned long, start)
+ 		__field(unsigned long, len)
++		__string(vma_name, vma && anon_vma_name(vma) ?
++			 anon_vma_name(vma)->name : "")
+ 	),
+ 	TP_fast_assign(
++		__entry->pid = current->pid;
++		__entry->tgid = current->tgid;
++		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
++		memcpy(__entry->leader_comm,
++		       current->group_leader ? current->group_leader->comm :
++		       current->comm, TASK_COMM_LEN);
++		__entry->mm = (unsigned long)(vma ? vma->vm_mm : current->mm);
+ 		__entry->vma_start = vma->vm_start;
+ 		__entry->vma_end = vma->vm_end;
+ 		__entry->start = start;
+ 		__entry->len = len;
++		__assign_str(vma_name);
+ 	),
+-	TP_printk("vma=0x%lx-0x%lx start=0x%lx len=%lu",
+-		__entry->vma_start, __entry->vma_end,
+-		__entry->start, __entry->len)
++	TP_printk("pid=%d tgid=%d comm=%s leader_comm=%s mm=0x%lx vma=[0x%lx-0x%lx] start=0x%lx len=%lu end=0x%lx vma_name=\"%s\"",
++		__entry->pid, __entry->tgid, __entry->comm,
++		__entry->leader_comm, __entry->mm, __entry->vma_start,
++		__entry->vma_end, __entry->start, __entry->len,
++		__entry->start + __entry->len, __get_str(vma_name))
+ );
+ 
+ TRACE_EVENT(mm_folio_partial_unmap,
+diff --git a/include/trace/events/mmap.h b/include/trace/events/mmap.h
+index 9be0adda42de71d07e85bec11672ea0d8b23ea5e..81122bee3cf41ddea2bb207beb4b80e6ffd0373d 100644
+--- a/include/trace/events/mmap.h
++++ b/include/trace/events/mmap.h
+@@ -7,6 +7,16 @@
+ 
+ #include <linux/tracepoint.h>
+ 
++#define MMAP_VMA_TYPE_ANON	0
++#define MMAP_VMA_TYPE_SHMEM	1
++#define MMAP_VMA_TYPE_FILE	2
++
++#define show_mmap_vma_type(type)					\
++	__print_symbolic(type,						\
++		{ MMAP_VMA_TYPE_ANON,	"anon" },			\
++		{ MMAP_VMA_TYPE_SHMEM,	"shmem" },			\
++		{ MMAP_VMA_TYPE_FILE,	"file" })
++
+ TRACE_EVENT(vm_unmapped_area,
+ 
+ 	TP_PROTO(unsigned long addr, struct vm_unmapped_area_info *info),
+@@ -64,18 +74,21 @@ TRACE_EVENT(exit_mmap,
+ );
+ 
+ TRACE_EVENT(mmap_fixed_unaligned,
+-	TP_PROTO(unsigned long addr, unsigned long len),
+-	TP_ARGS(addr, len),
++	TP_PROTO(unsigned long addr, unsigned long len, int vma_type),
++	TP_ARGS(addr, len, vma_type),
+ 	TP_STRUCT__entry(
+ 		__field(unsigned long, addr)
+ 		__field(unsigned long, len)
++		__field(int, vma_type)
+ 	),
+ 	TP_fast_assign(
+ 		__entry->addr = addr;
+ 		__entry->len = len;
++		__entry->vma_type = vma_type;
+ 	),
+-	TP_printk("addr=0x%lx len=%lu offset=0x%lx",
++	TP_printk("addr=0x%lx len=%lu vma_type=%s offset=0x%lx",
+ 		__entry->addr, __entry->len,
++		show_mmap_vma_type(__entry->vma_type),
+ 		__entry->addr & ((PAGE_SIZE << 2) - 1))
+ );
+ 
+diff --git a/mm/huge_memory.c b/mm/huge_memory.c
+index e59edb77a0e0c510602e1b52dc19855a2e87aaed..6170feea9171fe04262576fbb20720d25bbe93a7 100644
+--- a/mm/huge_memory.c
++++ b/mm/huge_memory.c
+@@ -1280,7 +1280,7 @@ static vm_fault_t __do_huge_pmd_anonymous_page(struct vm_fault *vmf)
+ 		map_anon_folio_pmd(folio, vmf->pmd, vma, haddr);
+ 		mm_inc_nr_ptes(vma->vm_mm);
+ 		this_cpu_inc(deferred_split_reason_counts[DSR_ZAP]);
+-		deferred_split_folio(folio, false);
++		deferred_split_folio(folio, false, DSR_ZAP, vma);
+ 		spin_unlock(vmf->ptl);
+ 	}
+ 
+@@ -4055,7 +4055,8 @@ bool __folio_unqueue_deferred_split(struct folio *folio)
+ }
+ 
+ /* partially_mapped=false won't clear PG_partially_mapped folio flag */
+-void deferred_split_folio(struct folio *folio, bool partially_mapped)
++void deferred_split_folio(struct folio *folio, bool partially_mapped,
++			  unsigned int reason, struct vm_area_struct *vma)
+ {
+ 	struct deferred_split *ds_queue = get_deferred_split_queue(folio);
+ #ifdef CONFIG_MEMCG
+@@ -4100,7 +4101,7 @@ void deferred_split_folio(struct folio *folio, bool partially_mapped)
+ 	if (list_empty(&folio->_deferred_list)) {
+ 		list_add_tail(&folio->_deferred_list, &ds_queue->split_queue);
+ 		ds_queue->split_queue_len++;
+-		trace_mm_folio_deferred_split(folio, 0);
++		trace_mm_folio_deferred_split(folio, reason, vma);
+ #ifdef CONFIG_MEMCG
+ 		if (memcg)
+ 			set_shrinker_bit(memcg, folio_nid(folio),
+diff --git a/mm/khugepaged.c b/mm/khugepaged.c
+index aaa17c0833a73a2d96cc07470ab4ea2b7d10b1f7..c490db140b06957d432a361de13831607050f6cf 100644
+--- a/mm/khugepaged.c
++++ b/mm/khugepaged.c
+@@ -1237,7 +1237,7 @@ static int collapse_huge_page(struct mm_struct *mm, unsigned long address,
+ 	set_pmd_at(mm, address, pmd, _pmd);
+ 	update_mmu_cache_pmd(vma, address, pmd);
+ 	this_cpu_inc(deferred_split_reason_counts[DSR_KHUGEPAGED]);
+-	deferred_split_folio(folio, false);
++	deferred_split_folio(folio, false, DSR_KHUGEPAGED, vma);
+ 	spin_unlock(pmd_ptl);
+ 
+ 	folio = NULL;
+diff --git a/mm/madvise.c b/mm/madvise.c
+index 1426bd7724b42aedf21352a8304e4cb25fbce44e..963f3901056b3b9becf18c365b653f7578023291 100644
+--- a/mm/madvise.c
++++ b/mm/madvise.c
+@@ -133,6 +133,54 @@ static int replace_anon_vma_name(struct vm_area_struct *vma,
+ 	if (anon_vma_name_eq(orig_name, anon_name))
+ 		return 0;
+ 
++	/*
++	 * If the original name is our auto-generated debug name, preserve it
++	 * by appending to the new user-set name.  Format: "user_name (debug_info)".
++	 */
++	if (orig_name &&
++	    (!strncmp(orig_name->name, "MAP_FIXED:", 10) ||
++	     !strncmp(orig_name->name, "non_MAP_FIXED:", 14) ||
++	     !strncmp(orig_name->name, "brk:", 4))) {
++		char combined[128];
++		struct anon_vma_name *combined_name;
++
++		snprintf(combined, sizeof(combined), "%s (%s)",
++			 anon_name->name, orig_name->name);
++		combined_name = anon_vma_name_alloc(combined);
++		if (combined_name) {
++			vma->anon_name = combined_name;
++			anon_vma_name_put(orig_name);
++			return 0;
++		}
++	}
++
++	/*
++	 * If orig_name is already a combined name (user set "foo" on a
++	 * debug-named VMA), extract the debug part and re-attach it.
++	 */
++	if (orig_name) {
++		const char *debug = NULL;
++
++		debug = strstr(orig_name->name, " (MAP_FIXED:");
++		if (!debug)
++			debug = strstr(orig_name->name, " (non_MAP_FIXED:");
++		if (!debug)
++			debug = strstr(orig_name->name, " (brk:");
++		if (debug) {
++			char combined[128];
++			struct anon_vma_name *combined_name;
++
++			snprintf(combined, sizeof(combined), "%s%s",
++				 anon_name->name, debug);
++			combined_name = anon_vma_name_alloc(combined);
++			if (combined_name) {
++				vma->anon_name = combined_name;
++				anon_vma_name_put(orig_name);
++				return 0;
++			}
++		}
++	}
++
+ 	vma->anon_name = anon_vma_name_reuse(anon_name);
+ 	anon_vma_name_put(orig_name);
+ 
+diff --git a/mm/mmap.c b/mm/mmap.c
+index 880eece925bf0358e0929419c21d9fc91d811de7..e96ed8bb071165346acc214d9c64ecab0d07cb64 100644
+--- a/mm/mmap.c
++++ b/mm/mmap.c
+@@ -555,7 +555,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
+ 			vm_flags |= VM_NORESERVE;
+ 	}
+ 
+-	addr = mmap_region(file, addr, len, vm_flags, pgoff, uf);
++	addr = mmap_region(file, addr, len, vm_flags, pgoff, uf, flags);
+ 	if (!IS_ERR_VALUE(addr) &&
+ 	    ((vm_flags & VM_LOCKED) ||
+ 	     (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE))
+@@ -685,6 +685,15 @@ EXPORT_SYMBOL_GPL(vm_unmapped_area);
+  *
+  * This function "knows" that -ENOMEM has the bits set.
+  */
++static inline int mmap_fixed_vma_type(struct file *filp, unsigned long flags)
++{
++	if (!filp)
++		return (flags & MAP_SHARED) ? MMAP_VMA_TYPE_SHMEM : MMAP_VMA_TYPE_ANON;
++	if (shmem_mapping(filp->f_mapping))
++		return MMAP_VMA_TYPE_SHMEM;
++	return MMAP_VMA_TYPE_FILE;
++}
++
+ unsigned long
+ generic_get_unmapped_area(struct file *filp, unsigned long addr,
+ 			  unsigned long len, unsigned long pgoff,
+@@ -694,13 +703,17 @@ generic_get_unmapped_area(struct file *filp, unsigned long addr,
+ 	struct vm_area_struct *vma, *prev;
+ 	struct vm_unmapped_area_info info = {};
+ 	const unsigned long mmap_end = arch_get_mmap_end(addr, len, flags);
++	int vma_type;
+ 
+ 	if (len > mmap_end - mmap_min_addr)
+ 		return -ENOMEM;
+ 
+ 	if (flags & MAP_FIXED) {
+-		if (!IS_ALIGNED(addr, PAGE_SIZE << 2))
+-			trace_mmap_fixed_unaligned(addr, len);
++		if (!IS_ALIGNED(addr, PAGE_SIZE << 2)) {
++			vma_type = mmap_fixed_vma_type(filp, flags);
++			if (vma_type != MMAP_VMA_TYPE_FILE)
++				trace_mmap_fixed_unaligned(addr, len, vma_type);
++		}
+ 		return addr;
+ 	}
+ 
+@@ -754,14 +767,18 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
+ 	struct mm_struct *mm = current->mm;
+ 	struct vm_unmapped_area_info info = {};
+ 	const unsigned long mmap_end = arch_get_mmap_end(addr, len, flags);
++	int vma_type;
+ 
+ 	/* requested length too big for entire address space */
+ 	if (len > mmap_end - mmap_min_addr)
+ 		return -ENOMEM;
+ 
+ 	if (flags & MAP_FIXED) {
+-		if (!IS_ALIGNED(addr, PAGE_SIZE << 2))
+-			trace_mmap_fixed_unaligned(addr, len);
++		if (!IS_ALIGNED(addr, PAGE_SIZE << 2)) {
++			vma_type = mmap_fixed_vma_type(filp, flags);
++			if (vma_type != MMAP_VMA_TYPE_FILE)
++				trace_mmap_fixed_unaligned(addr, len, vma_type);
++		}
+ 		return addr;
+ 	}
+ 
+diff --git a/mm/page_alloc.c b/mm/page_alloc.c
+index 9c7d1d0baeea08aaec4d78787dfd0662c2bb9c0c..7dd4757a518b9201831073a768104df40e0a402d 100644
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -3575,11 +3575,11 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
+ 	 * even if a suitable page happened to be free.
+ 	 */
+ 	if (free_pages <= min + z->lowmem_reserve[highest_zoneidx]) {
+-		
++		if(direct_reclaim) {
+ 			trace_alloc_stall_lowwatermark(z, order, min, free_pages,
+ 						       alloc_flags);
+ 			this_cpu_write(last_alloc_fail_reason, AFR_WMARK);
+-		
++		}
+ 		return false;
+ 	}
+ 
+@@ -3611,10 +3611,10 @@ bool __zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long m
+ 			return true;
+ 		}
+ 	}
+-	
+-	trace_alloc_stall_fragment(z, order, alloc_flags);
+-	this_cpu_write(last_alloc_fail_reason, AFR_FRAGMENT);
+-	
++	if(direct_reclaim) {
++		trace_alloc_stall_fragment(z, order, alloc_flags);
++		this_cpu_write(last_alloc_fail_reason, AFR_FRAGMENT);
++	}
+ 	return false;
+ }
+ 
+@@ -3626,9 +3626,10 @@ bool zone_watermark_ok_raw(struct zone *z, unsigned int order, unsigned long mar
+ 					zone_page_state(z, NR_FREE_PAGES), direct_reclaim);
+ }
+ 
+-static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
++static inline bool zone_watermark_fast_raw(struct zone *z, unsigned int order,
+ 				unsigned long mark, int highest_zoneidx,
+-				unsigned int alloc_flags, gfp_t gfp_mask)
++				unsigned int alloc_flags, gfp_t gfp_mask,
++				bool direct_reclaim)
+ {
+ 	long free_pages;
+ 
+@@ -3651,8 +3652,8 @@ static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
+ 			return true;
+ 	}
+ 
+-	if (__zone_watermark_ok(z, order, mark, highest_zoneidx, alloc_flags,
+-					free_pages))
++	if (__zone_watermark_ok_raw(z, order, mark, highest_zoneidx, alloc_flags,
++				free_pages, direct_reclaim))
+ 		return true;
+ 
+ 	/*
+@@ -3664,13 +3665,16 @@ static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
+ 	if (unlikely(!order && (alloc_flags & ALLOC_MIN_RESERVE) && z->watermark_boost
+ 		&& ((alloc_flags & ALLOC_WMARK_MASK) == WMARK_MIN))) {
+ 		mark = z->_watermark[WMARK_MIN];
+-		return __zone_watermark_ok(z, order, mark, highest_zoneidx,
+-					alloc_flags, free_pages);
++		return __zone_watermark_ok_raw(z, order, mark, highest_zoneidx,
++					alloc_flags, free_pages, direct_reclaim);
+ 	}
+ 
+ 	return false;
+ }
+ 
++#define zone_watermark_fast(z, o, m, hz, af, gfp) \
++	zone_watermark_fast_raw(z, o, m, hz, af, gfp, false)
++
+ #ifdef CONFIG_NUMA
+ int __read_mostly node_reclaim_distance = RECLAIM_DISTANCE;
+ 
+@@ -3855,9 +3859,9 @@ get_page_from_freelist_raw(gfp_t gfp_mask, unsigned int order, int alloc_flags,
+ 
+ check_alloc_wmark:
+ 		mark = wmark_pages(zone, alloc_flags & ALLOC_WMARK_MASK);
+-		if (!zone_watermark_fast(zone, order, mark,
++		if (!zone_watermark_fast_raw(zone, order, mark,
+ 				       ac->highest_zoneidx, alloc_flags,
+-				       gfp_mask)) {
++				       gfp_mask, direct_reclaim)) {
+ 			int ret;
+ 
+ 			if (cond_accept_memory(zone, order, alloc_flags))
+@@ -3878,7 +3882,6 @@ get_page_from_freelist_raw(gfp_t gfp_mask, unsigned int order, int alloc_flags,
+ 
+ 			if (!node_reclaim_enabled() ||
+ 			    !zone_allows_reclaim(zonelist_zone(ac->preferred_zoneref), zone)) {
+-				this_cpu_write(last_alloc_fail_reason, AFR_WMARK);
+ 				continue;
+ 			}
+ 
+@@ -3892,8 +3895,8 @@ get_page_from_freelist_raw(gfp_t gfp_mask, unsigned int order, int alloc_flags,
+ 				continue;
+ 			default:
+ 				/* did we reclaim enough */
+-				if (zone_watermark_ok_raw(zone, order, mark,
+-					ac->highest_zoneidx, alloc_flags, direct_reclaim))
++				if (zone_watermark_ok(zone, order, mark,
++					ac->highest_zoneidx, alloc_flags))
+ 					goto try_this_zone;
+ 
+ 				continue;
+diff --git a/mm/rmap.c b/mm/rmap.c
+index d3a1cd0592833a563d35f640a478975eb80f596a..3cae831646c6d38f7ae96cab838a786d5a6b38e4 100644
+--- a/mm/rmap.c
++++ b/mm/rmap.c
+@@ -1764,7 +1764,7 @@ static __always_inline void __folio_remove_rmap(struct folio *folio,
+ 	    !folio_test_partially_mapped(folio)) {
+ 		trace_mm_folio_partial_unmap(folio, page, nr, nr_pmdmapped);
+ 		this_cpu_inc(deferred_split_reason_counts[DSR_PARTIALLY_MAPPED]);
+-		deferred_split_folio(folio, true);
++		deferred_split_folio(folio, true, DSR_PARTIALLY_MAPPED, vma);
+ 	}
+ 
+ 	__folio_mod_stat(folio, -nr, -nr_pmdmapped);
+diff --git a/mm/vma.c b/mm/vma.c
+index abe0da33c8446157c6fa2fea9e2c22651136a873..fa92e958cad58a82dce98d02d3305a8e2df4411e 100644
+--- a/mm/vma.c
++++ b/mm/vma.c
+@@ -16,6 +16,7 @@ struct mmap_state {
+ 	pgoff_t pgoff;
+ 	unsigned long pglen;
+ 	vm_flags_t vm_flags;
++	unsigned long flags;
+ 	struct file *file;
+ 	pgprot_t page_prot;
+ 
+@@ -37,7 +38,7 @@ struct mmap_state {
+ 	bool check_ksm_early;
+ };
+ 
+-#define MMAP_STATE(name, mm_, vmi_, addr_, len_, pgoff_, vm_flags_, file_) \
++#define MMAP_STATE(name, mm_, vmi_, addr_, len_, pgoff_, vm_flags_, file_, flags_) \
+ 	struct mmap_state name = {					\
+ 		.mm = mm_,						\
+ 		.vmi = vmi_,						\
+@@ -46,6 +47,7 @@ struct mmap_state {
+ 		.pgoff = pgoff_,					\
+ 		.pglen = PHYS_PFN(len_),				\
+ 		.vm_flags = vm_flags_,					\
++		.flags = flags_,					\
+ 		.file = file_,						\
+ 		.page_prot = vm_get_page_prot(vm_flags_),		\
+ 	}
+@@ -564,6 +566,31 @@ __split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
+ 		vma->vm_end = addr;
+ 	}
+ 
++	/*
++	 * Mark both fragments with "_split" suffix so we can distinguish
++	 * originally-misaligned VMAs from split fragments.
++	 */
++	if (vma->anon_name &&
++	    !strstr(vma->anon_name->name, "_split") &&
++	    (!strncmp(vma->anon_name->name, "MAP_FIXED:", 10) ||
++	     !strncmp(vma->anon_name->name, "non_MAP_FIXED:", 14) ||
++	     !strncmp(vma->anon_name->name, "brk:", 4))) {
++		char split_name[64];
++		struct anon_vma_name *split_anon;
++
++		snprintf(split_name, sizeof(split_name), "%s_split",
++			 vma->anon_name->name);
++		split_anon = anon_vma_name_alloc(split_name);
++		if (split_anon) {
++			struct anon_vma_name *old = vma->anon_name;
++
++			vma->anon_name = anon_vma_name_reuse(split_anon);
++			new->anon_name = anon_vma_name_reuse(split_anon);
++			anon_vma_name_put(old);
++			anon_vma_name_put(old);
++		}
++	}
++
+ 	/* vma_complete stores the new vma */
+ 	vma_complete(&vp, vmi, vma->vm_mm);
+ 	validate_mm(vma->vm_mm);
+@@ -2476,8 +2503,36 @@ static int __mmap_new_vma(struct mmap_state *map, struct vm_area_struct **vmap)
+ 		error = __mmap_new_file_vma(map, vma);
+ 	else if (map->vm_flags & VM_SHARED)
+ 		error = shmem_zero_setup(vma);
+-	else
++	else {
+ 		vma_set_anonymous(vma);
++		/*
++		 * Set anon_vma_name for anonymous VMAs with MAP_FIXED and
++		 * 16KB alignment information for debugging.
++		 */
++		if (map->flags & MAP_FIXED) {
++			if (IS_ALIGNED(map->addr, 16384) &&
++			    IS_ALIGNED(map->end, 16384))
++				vma->anon_name = anon_vma_name_alloc(
++					"MAP_FIXED:16KB_aligned");
++			else if (IS_ALIGNED(map->addr, 16384))
++				vma->anon_name = anon_vma_name_alloc(
++					"MAP_FIXED:start_16KB_aligned_end_not");
++			else
++				vma->anon_name = anon_vma_name_alloc(
++					"MAP_FIXED:not_16KB_aligned");
++		} else {
++			if (IS_ALIGNED(map->addr, 16384) &&
++			    IS_ALIGNED(map->end, 16384))
++				vma->anon_name = anon_vma_name_alloc(
++					"non_MAP_FIXED:16KB_aligned");
++			else if (IS_ALIGNED(map->addr, 16384))
++				vma->anon_name = anon_vma_name_alloc(
++					"non_MAP_FIXED:start_16KB_aligned_end_not");
++			else
++				vma->anon_name = anon_vma_name_alloc(
++					"non_MAP_FIXED:not_16KB_aligned");
++		}
++	}
+ 
+ 	if (error)
+ 		goto free_iter_vma;
+@@ -2638,14 +2693,14 @@ static bool can_set_ksm_flags_early(struct mmap_state *map)
+ 
+ static unsigned long __mmap_region(struct file *file, unsigned long addr,
+ 		unsigned long len, vm_flags_t vm_flags, unsigned long pgoff,
+-		struct list_head *uf)
++		struct list_head *uf, unsigned long flags)
+ {
+ 	struct mm_struct *mm = current->mm;
+ 	struct vm_area_struct *vma = NULL;
+ 	int error;
+ 	bool have_mmap_prepare = file && file->f_op->mmap_prepare;
+ 	VMA_ITERATOR(vmi, mm, addr);
+-	MMAP_STATE(map, mm, &vmi, addr, len, pgoff, vm_flags, file);
++	MMAP_STATE(map, mm, &vmi, addr, len, pgoff, vm_flags, file, flags);
+ 
+ 	map.check_ksm_early = can_set_ksm_flags_early(&map);
+ 
+@@ -2713,7 +2768,7 @@ static unsigned long __mmap_region(struct file *file, unsigned long addr,
+  */
+ unsigned long mmap_region(struct file *file, unsigned long addr,
+ 			  unsigned long len, vm_flags_t vm_flags, unsigned long pgoff,
+-			  struct list_head *uf)
++			  struct list_head *uf, unsigned long flags)
+ {
+ 	unsigned long ret;
+ 	bool writable_file_mapping = false;
+@@ -2737,7 +2792,7 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
+ 		writable_file_mapping = true;
+ 	}
+ 
+-	ret = __mmap_region(file, addr, len, vm_flags, pgoff, uf);
++	ret = __mmap_region(file, addr, len, vm_flags, pgoff, uf, flags);
+ 
+ 	/* Clear our write mapping regardless of error. */
+ 	if (writable_file_mapping)
+@@ -2804,6 +2859,19 @@ int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *vma,
+ 		goto unacct_fail;
+ 
+ 	vma_set_anonymous(vma);
++	/*
++	 * Set anon_vma_name for brk-created anonymous VMAs with
++	 * 16KB alignment information. brk() is never MAP_FIXED.
++	 */
++	if (IS_ALIGNED(addr, 16384) && IS_ALIGNED(addr + len, 16384))
++		vma->anon_name = anon_vma_name_alloc(
++			"brk:16KB_aligned");
++	else if (IS_ALIGNED(addr, 16384))
++		vma->anon_name = anon_vma_name_alloc(
++			"brk:start_16KB_aligned_end_not");
++	else
++		vma->anon_name = anon_vma_name_alloc(
++			"brk:not_16KB_aligned");
+ 	vma_set_range(vma, addr, addr + len, addr >> PAGE_SHIFT);
+ 	vm_flags_init(vma, vm_flags);
+ 	vma->vm_page_prot = vm_get_page_prot(vm_flags);
+diff --git a/mm/vma.h b/mm/vma.h
+index 9183fe549009076fad74863c49a00413fe33ef08..64e9997bac66af9294ce8c3e792beecc10bcdb8b 100644
+--- a/mm/vma.h
++++ b/mm/vma.h
+@@ -332,7 +332,7 @@ void mm_drop_all_locks(struct mm_struct *mm);
+ 
+ unsigned long mmap_region(struct file *file, unsigned long addr,
+ 		unsigned long len, vm_flags_t vm_flags, unsigned long pgoff,
+-		struct list_head *uf);
++		struct list_head *uf, unsigned long flags);
+ 
+ int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *brkvma,
+ 		 unsigned long addr, unsigned long request, unsigned long flags);

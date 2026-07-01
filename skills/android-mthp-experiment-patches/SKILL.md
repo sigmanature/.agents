@@ -20,3 +20,4 @@ Core policy:
 
 Archived experiment details:
 - Read [references/archived-uffd-order2.md](references/archived-uffd-order2.md) before restoring the UFFD anonymous mfill order-2 fast path.
+- Full high-overhead June 2026 experiment archive lives at `/home/nzzhao/.agents/skills/archive/android-mthp-experiment-20260629`; use it only when restoring the complete trace/counter/swap-birth-record instrumentation.

@@ -1,0 +1,13 @@
+ include/trace/events/huge_memory.h | 312 +++++++++++++++++++++++-
+ mm/Makefile                        |   1 +
+ mm/huge_memory.c                   |  44 ++++
+ mm/memory.c                        | 478 +++++++++++++++++++++++++++++++++++--
+ mm/mremap.c                        |   9 +
+ mm/page_alloc.c                    |  53 +++-
+ mm/rmap.c                          |   3 +
+ mm/shmem.c                         |  81 ++++++-
+ mm/swap_state.c                    |   2 +
+ mm/swapfile.c                      |  80 ++++++-
+ mm/userfaultfd.c                   |  68 +++++-
+ mm/vmscan.c                        |   4 +
+ 12 files changed, 1097 insertions(+), 38 deletions(-)
