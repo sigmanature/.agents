@@ -159,9 +159,15 @@ def sample_loop(
     return num, num_err
 
 
-def run_derive_metrics(*, scripts_dir: Path, out_dir: Path) -> None:
+def run_derive_metrics(*, scripts_dir: Path, out_dir: Path,
+                       vmstat_start: Optional[Path] = None,
+                       vmstat_end: Optional[Path] = None) -> None:
     derive = scripts_dir / "derive_metrics.py"
     cmd = [sys.executable, str(derive), str(out_dir / "raw_samples.csv"), "--out-dir", str(out_dir)]
+    if vmstat_start and vmstat_start.exists():
+        cmd.extend(["--vmstat-start", str(vmstat_start)])
+    if vmstat_end and vmstat_end.exists():
+        cmd.extend(["--vmstat-end", str(vmstat_end)])
     cp = run(cmd, timeout_s=120, check=False)
     (out_dir / "derive_stdout.txt").write_text(cp.stdout or "", encoding="utf-8")
     (out_dir / "derive_stderr.txt").write_text(cp.stderr or "", encoding="utf-8")

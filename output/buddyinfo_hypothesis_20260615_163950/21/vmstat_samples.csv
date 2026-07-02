@@ -1,3 +1,0 @@
-host_ts,allocstall_normal,allocstall_movable,pgscan_direct,pgsteal_direct,pgscan_kswapd,pgsteal_kswapd,pgscan_direct_throttle,compact_stall,compact_success,pageoutrun,kswapd_inodesteal
-1781512979,55,319,43876,26148,1375964,792369,0,268,225,413,8
-1781513012,162,2415,270690,156976,2729345,1645639,0,739,590,700,42

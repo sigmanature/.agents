@@ -1,12 +1,10 @@
 {
-  "_template": "android-thp-fallback-sampler default memstress manifest template. Copy and fill run-specific fields before launching.",
-  "_template_source": "Based on /home/nzzhao/runs/thp_memstress_120cycles_20260625/run_manifest.json",
+  "_template": "android-thp-fallback-sampler default memstress manifest. 复制后可替换 serial 与 packages 再运行。",
   "serial": "<DEVICE_SERIAL>",
   "start_host_ts": null,
   "end_host_ts": null,
   "status": "pending",
   "config": {
-    "stats_dir": "/sys/kernel/mm/transparent_hugepage/hugepages-16kB/stats",
     "counters": [
       "anon_fault_alloc",
       "anon_fault_fallback",
@@ -16,10 +14,10 @@
       "swpout",
       "zswpout"
     ],
-    "interval_s": 10,
+    "interval_s": 60,
     "use_su": true,
     "no_network_check": true,
-    "max_cycles": 30,
+    "max_cycles": 120,
     "memstress": {
       "packages": [
         "com.chinamworld.main",
@@ -75,7 +73,7 @@
         "com.tencent.qqlive",
         "com.tencent.tmgp.dfm",
         "com.hpbr.bosszhipin",
-        "com.mi.oa",
+        "com.autonavi.minimap",
         "com.deepseek.chat",
         "com.youku.phone",
         "com.duowan.kiwi",
@@ -113,7 +111,7 @@
         "com.chaoxing.mobile",
         "com.baidu.netdisk",
         "ctrip.android.view",
-        "com.topjohnwu.magisk",
+        "com.tencent.qqmusic",
         "com.duokan.phone.remotecontroller",
         "com.sankuai.meituan.takeoutnew",
         "cn.xuexi.android",

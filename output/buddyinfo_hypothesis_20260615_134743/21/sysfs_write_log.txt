@@ -1,2 +1,0 @@
-[write] /sys/kernel/mm/readahead/min_order before=adb: device '21121FDF600C4G' not found
-[write] /sys/kernel/mm/readahead/min_order ERROR: adb: device '21121FDF600C4G' not found
