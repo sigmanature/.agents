@@ -37,6 +37,8 @@ from utils.thp_utils import ensure_thp_mode_for_stats
 from utils.buddyinfo_utils import buddyinfo_sample_loop
 from utils.vmstat_utils import derive_vmstat_csv, read_vmstat, vmstat_sample_loop
 from utils.interactive import interactive_click_loop
+from precondition_memory import run_precondition, load_packages_from_manifest as _load_pkgs_manifest
+from fragmem_host import run_fragmem_precondition, stop_fragmem
 
 
 # === CONFIG (overridable via CLI or --from-manifest) ===
@@ -264,6 +266,14 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
     # --- THP ensure (disabled — caller sets THP before running) ---
     # ensure_thp_mode_for_stats(...)
 
+    # --- post-prepare hook (e.g. set compaction sysctl after cool-down + lock-freq) ---
+    post_cmd = getattr(args, 'post_prepare_cmd', None)
+    if post_cmd:
+        print(f"[{serial}] post-prepare: {post_cmd}")
+        subprocess.run(
+            ["adb", "-s", serial, "shell", f"su -c '{post_cmd}'"],
+            capture_output=True, text=True, timeout=30)
+
     # --- vmstat baseline snapshot (before workload) ---
     vmstat_start = record_vmstat_start(serial, out_dir, use_su)
 
@@ -456,6 +466,21 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
 
     sampler_thread.join(timeout=10)
 
+    # --- kill fragmem if it was started ---
+    if getattr(args, 'precondition', False):
+        try:
+            stop_fragmem(serial, use_su=use_su)
+        except Exception:
+            pass
+
+    # --- post-workload hook ---
+    post_wl_cmd = getattr(args, 'post_workload_cmd', None)
+    if post_wl_cmd:
+        print(f"[{serial}] post-workload: {post_wl_cmd}")
+        subprocess.run(
+            ["adb", "-s", serial, "shell", f"su -c '{post_wl_cmd}'"],
+            capture_output=True, text=True, timeout=30)
+
     # --- vmstat final snapshot (after workload) ---
     record_vmstat_end(serial, out_dir, use_su)
 
@@ -520,6 +545,20 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="During device prepare, write 1 to /sys/kernel/tracing/tracing_on (default: on). No events are enabled, so overhead is near zero.",
     )
     p.add_argument("--from-manifest", default=None, help="Load all params from a previous run_manifest.json")
+    p.add_argument("--post-prepare-cmd", default=None,
+                   help="Shell command to run on device (via su) after device-prepare but before workload. "
+                        "Use for setting compaction sysctl after cool-down.")
+    p.add_argument("--post-workload-cmd", default=None,
+                   help="Shell command to run on device (via su) after workload ends but before vmstat_end. "
+                        "Use for stopping simpleperf etc.")
+
+    # Preconditioning options (fragmem-based)
+    p.add_argument("--precondition", action="store_true", default=False,
+                   help="Run fragmem preconditioning to fragment memory before memstress")
+    p.add_argument("--precondition-threshold", type=int, default=2000,
+                   help="Buddyinfo sum(order>=2) threshold for fragmem (default: 2000)")
+    p.add_argument("--precondition-alloc-mb", type=int, default=4000,
+                   help="Total MB for fragmem to allocate (default: 5000)")
 
     args = p.parse_args(argv)
 

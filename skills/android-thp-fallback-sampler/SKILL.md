@@ -71,3 +71,50 @@ fallback_ratio = Δanon_fault_fallback / (Δanon_fault_alloc + Δanon_fault_fall
 - 使用 manifest：`config/default_memstress_manifest.json`
 - 输出目录：`--out-dir` 指定，或默认 `/tmp/thp_memstress_<timestamp>`
 - 关键产物：`derived.csv`（含 `fallback_ratio`）、`summary.md`（含 `anon_alloc`/`anon_fallback`/`fallback_ratio`/`alloc_stall`/`compact_stall`，均为 end - start）、`run_manifest.json`
+
+## Precondition (独立脚本)
+
+在 memstress 之前运行，制造碎片化初始状态。**必须在 THP never 下执行**（脚本自动设置）。
+
+```bash
+python3 scripts/precondition.py --serial <SERIAL> --alloc-mb 5000 --threshold 2000
+```
+
+- 自动重启设备、等待 su 就绪
+- 强制 THP never → 运行 fragmem（全 order-0 分配 + munmap 碎片化）
+- fragmem 在后台 hold 内存，实验结束后 `killall fragmem`
+
+流程顺序：
+1. `precondition.py`（重启 + 碎片化，THP never）
+2. 设 THP / sysctl 配置（此时不设 compaction 开关）
+3. `run_memstress_and_collect_logs.py --post-prepare-cmd '...'`（温控 → 锁频 → post-prepare 设 compaction → workload）
+
+**规则**：precondition 后不再重启，碎片状态通过 fragmem hold 保持。
+
+## CPU Accounting (独立脚本)
+
+采集 kcompactd/kswapd CPU 时间 + direct reclaim/compact 精确耗时。与主脚本解耦。
+
+```bash
+# 在 memstress 前启动 trace:
+python3 scripts/trace_cpu_accounting.py start --serial <SERIAL> --out-dir <RUN_DIR>
+
+# (跑 memstress)
+
+# memstress 结束后收集:
+python3 scripts/trace_cpu_accounting.py stop --serial <SERIAL> --out-dir <RUN_DIR>
+
+# 离线分析:
+python3 scripts/trace_cpu_accounting.py analyze --out-dir <RUN_DIR>
+```
+
+产出：
+- `schedstat_start.json` / `schedstat_end.json`：kcompactd/kswapd 的 on_cpu_ns, wait_ns, timeslices
+- `ftrace_mm.txt`：raw ftrace（mm_vmscan_direct_reclaim_begin/end, mm_compaction_begin/end）
+- `direct_reclaim_stats.json`：解析后的 direct reclaim/compact 总耗时和次数
+
+**规则**：
+- trace 脚本不影响主脚本的任何行为
+- schedstat 零开销（读 /proc）
+- ftrace mm instance 独立 buffer，事件量小（几万级），开销可忽略
+- 随机种子永远不动：`20260617`
