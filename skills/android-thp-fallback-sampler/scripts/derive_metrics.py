@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-import statistics
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -117,47 +117,99 @@ def write_derived(raw: List[Row], out_csv: Path) -> None:
             window_err = 0
 
 
-def write_summary(derived_csv: Path, out_md: Path) -> None:
-    ratios: List[float] = []
-    attempts_total = 0
-    fallback_total = 0
+# ---------- vmstat summary helpers ----------
+
+VMSTAT_ALLOCSTALL_KEYS = ("allocstall_normal", "allocstall_movable")
+VMSTAT_COMPACT_KEYS = ("compact_stall",)
+
+
+def read_vmstat_json(path: Path) -> Dict[str, int]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    result: Dict[str, int] = {}
+    for k, v in data.items():
+        try:
+            result[k] = int(v)
+        except (TypeError, ValueError):
+            pass
+    return result
+
+
+def compute_vmstat_delta(start_path: Path, end_path: Path) -> Dict[str, Optional[int]]:
+    """Return end - start for the general vmstat metrics shown in summary.md."""
+    start = read_vmstat_json(start_path)
+    end = read_vmstat_json(end_path)
+    if not start or not end:
+        return {}
+
+    def _get(d: Dict[str, int], keys: tuple) -> int:
+        return sum(d.get(k, 0) for k in keys)
+
+    alloc_stall_start = _get(start, VMSTAT_ALLOCSTALL_KEYS)
+    alloc_stall_end = _get(end, VMSTAT_ALLOCSTALL_KEYS)
+    compact_stall_start = _get(start, VMSTAT_COMPACT_KEYS)
+    compact_stall_end = _get(end, VMSTAT_COMPACT_KEYS)
+
+    return {
+        "alloc_stall": alloc_stall_end - alloc_stall_start,
+        "compact_stall": compact_stall_end - compact_stall_start,
+    }
+
+
+def write_summary(derived_csv: Path, out_md: Path,
+                  vmstat_delta: Optional[Dict[str, int]] = None) -> None:
     alloc_total = 0
+    fallback_total = 0
+    attempts_total = 0
 
     with derived_csv.open("r", encoding="utf-8") as f:
         r = csv.DictReader(f)
         for d in r:
-            ra = (d.get("fallback_ratio") or "").strip()
-            if ra:
-                try:
-                    ratios.append(float(ra))
-                except ValueError:
-                    pass
             a = (d.get("d_anon_fault_alloc") or "").strip()
             fb = (d.get("d_anon_fault_fallback") or "").strip()
             at = (d.get("attempts") or "").strip()
-            if a.isdigit():
+            if a.lstrip("-").isdigit():
                 alloc_total += int(a)
             if fb.lstrip("-").isdigit():
                 fallback_total += int(fb)
-            if at.isdigit():
+            if at.lstrip("-").isdigit():
                 attempts_total += int(at)
 
     overall_ratio = (fallback_total / attempts_total) if attempts_total > 0 else None
 
-    lines: List[str] = []
-    lines.append("# THP 64KB anon fallback summary\n")
-    if overall_ratio is not None:
-        lines.append(f"- **overall fallback_ratio**: {overall_ratio:.6f}  ")
-        lines.append(f"  (fallback={fallback_total}, attempts={attempts_total}, alloc={alloc_total})\n")
-    else:
-        lines.append("- overall fallback_ratio: N/A (no valid attempts)\n")
+    vmstat_delta = vmstat_delta or {}
+    alloc_stall = vmstat_delta.get("alloc_stall")
+    compact_stall = vmstat_delta.get("compact_stall")
 
-    if ratios:
-        lines.append(f"- windows with valid ratio: {len(ratios)}")
-        lines.append(f"- ratio median: {statistics.median(ratios):.6f}")
-        lines.append(f"- ratio p90: {statistics.quantiles(ratios, n=10)[8]:.6f} (approx)\n")
-    else:
-        lines.append("- no valid per-window ratios (check raw_samples.csv errors / missing counters)\n")
+    def _fmt(v: Optional[int]) -> str:
+        if v is None:
+            return "N/A"
+        return str(v)
+
+    ratio_str = f"{overall_ratio:.6f}" if overall_ratio is not None else "N/A"
+
+    lines: List[str] = [
+        "# THP 16KB Anon Fallback Summary\n",
+        "## General metrics (end - start)\n",
+        "| metric | value |",
+        "|--------|-------|",
+        f"| anon_alloc | {alloc_total} |",
+        f"| anon_fallback | {fallback_total} |",
+        f"| fallback_ratio | {ratio_str} |",
+        f"| alloc_stall | {_fmt(alloc_stall)} |",
+        f"| compact_stall | {_fmt(compact_stall)} |\n",
+        "- **anon_alloc**: total `anon_fault_alloc` during the experiment (THP stats end - start).",
+        "- **anon_fallback**: total `anon_fault_fallback` during the experiment (THP stats end - start).",
+        "- **fallback_ratio**: `anon_fallback / (anon_alloc + anon_fallback)`.",
+        "- **alloc_stall**: `allocstall_normal + allocstall_movable` from `/proc/vmstat` (end - start).",
+        "- **compact_stall**: `compact_stall` from `/proc/vmstat` (end - start).",
+        "",
+        "Per-window deltas are available in `derived.csv` and `vmstat_derived.csv`.",
+    ]
 
     out_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -166,6 +218,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description="derive deltas and fallback ratios from raw_samples.csv")
     p.add_argument("raw_csv", help="Path to raw_samples.csv")
     p.add_argument("--out-dir", default=None, help="Output dir (default: same dir as raw)")
+    p.add_argument("--vmstat-start", default=None, help="Path to vmstat_start.json")
+    p.add_argument("--vmstat-end", default=None, help="Path to vmstat_end.json")
 
     args = p.parse_args(argv)
 
@@ -178,14 +232,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     raw = read_raw(raw_path)
     if len(raw) < 2:
-        (out_dir / "summary.md").write_text("# THP 64KB anon fallback summary\n\nNot enough samples.\n", encoding="utf-8")
+        (out_dir / "summary.md").write_text("# THP 16KB Anon Fallback Summary\n\nNot enough samples.\n", encoding="utf-8")
         return 0
 
     derived_csv = out_dir / "derived.csv"
     write_derived(raw, derived_csv)
 
+    vmstat_delta = None
+    if args.vmstat_start and args.vmstat_end:
+        vmstat_delta = compute_vmstat_delta(Path(args.vmstat_start), Path(args.vmstat_end))
+
     summary_md = out_dir / "summary.md"
-    write_summary(derived_csv, summary_md)
+    write_summary(derived_csv, summary_md, vmstat_delta)
 
     return 0
 

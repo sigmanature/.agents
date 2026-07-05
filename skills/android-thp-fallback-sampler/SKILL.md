@@ -1,379 +1,120 @@
 ---
 name: android-thp-fallback-sampler
-description: automate long-running sampling of android anon 16KB large folio fallback stats via adb; optionally batch install apks and run monkey workload; outputs raw/derived csv and summary for anon_fallback ratio trending.
+description: automate long-running sampling of android anon 16KB large folio fallback stats via adb; run memstress workload and output raw/derived csv + summary.
 ---
 
 # Android THP 16KB Anon Fallback Sampler
 
-> **模型默认启动配置**: `/home/nzzhao/runs/thp_memstress_120cycles_20260625/run_manifest.json`
-> **技能默认模板**: `config/default_memstress_manifest.json`（可复制修改后作为单次运行输入）
+> **最短复现入口**: 仓库根目录 [`README.md`](../README.md)
+> **默认配置模板**: [`config/default_memstress_manifest.json`](../config/default_memstress_manifest.json)
 
-## 最短理解路径（Agent 必看）
+本 skill 只保留一个核心脚本：
+- `scripts/run_memstress_and_collect_logs.py`：在已 root 的 Android 设备上运行 memstress，并周期性采样 THP 16KB/32KB/64KB stats，输出 `raw_samples.csv` / `derived.csv` / `summary.md`。
 
-如果你是第一次使用本 skill，按下面顺序理解，不要跳过：
+## 什么时候用
 
-1. 先读 `config/default_memstress_manifest.json`：它描述了一次标准 memstress + THP 16KB stats 采样的**全部默认参数**（包列表、counters、间隔、`no_network_check` 默认跳过网络检查、memstress 启停节奏）。
-2. 再读本文件下面的 **快速开始 → 3) 跑“采样 + memstress”长测**，把模板里的参数对应到命令行。
-3. 启动脚本时一定要先阅读references/long_shell_spec.md
-4. 需要对比不同开关或 fleet 多设备时，再看 **Workflow Contract** 和 **常见坑 / 稳定性建议**。
-
-本 skill 所有 workload 的默认配置都逐步收敛到 `config/` 目录下的 manifest 模板；新增 workload 默认配置时也优先放在这里，并在本文件顶部引用。
-
-用来**稳定跑手机端长时间测试**：同时利用
-- monkey + adb 压力/切换 workload android-adb-workflows skill
-- memstress 启停循环 workload（快速启动多 app、保活一批、再 force-stop 一批）
-- adb 批量安装 APK wechat-wxapkg-and-apk-batch-tools skill
-
-并在测试期间按固定间隔采样：
-`/sys/kernel/mm/transparent_hugepage/hugepages-16kB/stats/*`
-
-重点指标（建议主口径）：
-
-- `fallback_ratio = Δanon_fault_fallback / (Δanon_fault_alloc + Δanon_fault_fallback)`
-
-> 这里把 `anon_fault_fallback` 视作“anon 64K folio 分配失败回退”的次数；
-> `anon_fault_alloc` 视作“anon 64K folio 分配成功”的次数。
-
----
-
-## 什么时候用这个 skill
-
-- 你要对比不同开关组合（anon large folio / mTHP large folio / 其它）在**长时间运行**时 `anon_fallback` 比率是否随时间上升。
-- 你有一套可复现 workload（monkey、重内存 app 启停循环，或脚本），希望把**采样 + 压测 + 安装一堆 app**串成一键流程。
-
----
+- 需要长时间运行一个可控的 app 启停负载，并同时采样 anon large folio 的 fallback 比率。
+- 希望复现实验：同样的 manifest + seed 可以跑出相同的包启动顺序。
 
 ## 快速开始
 
-> 运行都在**你的电脑(Host)** 上执行，手机通过 adb 连接。
-
-### 0) 前置检查
-
-```bash
-adb devices
-# 确认设备是 device 状态
-```
-
-**本 skill 默认目标设备已 root 并可用 `su`。** 所有需要 root 的操作（读/写 sysfs、设置 SELinux、点亮屏幕等）都通过 `adb shell "su -c '...'"` 执行，agent 侧不做 root 可用性校验。如果设备没有 su，脚本会在对应日志里记录错误但不会中断整个流程（`setenforce 0`、`tracing_on` 等步骤均为 best-effort）。
-
-如果本轮目标是观测高阶分配是否触发 direct reclaim / sync compaction，先固定并记录 THP 与文件系统 folio cap 状态：
-
-```bash
-python3 scripts/preflight_thp_folio_caps.py \
-  --serial <SERIAL> \
-  --out-dir ./output/preflight_highorder_001 \
-  --thp-enabled always \
-  --thp-defrag always \
-  --mthp-enabled always \
-  --folio-cap 2
-```
-
-该脚本会输出 `preflight.json` 和 `preflight.md`，重点确认：
-- f2fs/ext4 是否存在 `max_folio_order_cap` / `min_folio_order_cap`
-- cap 写入后实际值是否为 2
-- mTHP anon 是否启用
-- `mm_page_alloc`、direct reclaim、compaction、readahead tracepoint 是否存在
-
-### 1) 可选：批量安装 APK
-
-> 批量安装能力由 `wechat-wxapkg-and-apk-batch-tools` skill 统一维护，本 skill 仅复用该能力。
-
-```bash
-python3 scripts/apk_batch_install.py ./apks --output-dir ./output/apk_install_run_001
-```
-
-如果 `./apks` 是你用符号链接拼出来的 staging 目录，脚本现在会在存在断链 `*.apk` 时直接报错并点名缺失项，先修好 staging 再继续长测。
-
-### 2) 跑“采样 + monkey”长测
-
-```bash
-python3 scripts/run_monkey.py \
-  --serial <SERIAL> \
-  --duration-s 21600 \
-  --interval-s 60 \
-  --out-dir ./output/thp_run_001 \
-  --thp-ensure-mode always \
-  --setup-shell "echo always > /sys/kernel/mm/transparent_hugepage/hugepages-16kB/anon" \
-  --monkey global
-```
-
-如果你要把 monkey 限制在某个 app：
-
-```bash
-python3 scripts/run_monkey.py \
-  --serial <SERIAL> \
-  --duration-s 21600 \
-  --interval-s 60 \
-  --out-dir ./output/thp_run_002 \
-  --monkey package \
-  --monkey-package com.example.app
-```
-
-### 3) 跑“采样 + memstress”长测
-
-适用于更强调**快速切换/冷启动 churn** 的场景：每轮快速启动多 app，每次启动后 hold 一小段时间，然后按 HOME 返回桌面（不 force-stop，不做 LRU）。
-
-默认参数模板见 `config/default_memstress_manifest.json`。
+见 [`README.md`](../README.md)。最短命令：
 
 ```bash
 python3 scripts/run_memstress_and_collect_logs.py \
-  --serial <SERIAL> \
-  --duration-s 21600 \
-  --interval-s 60 \
-  --out-dir ./output/thp_memstress_001 \
-  --thp-ensure-mode always \
-  --setup-shell "echo always > /sys/kernel/mm/transparent_hugepage/hugepages-16kB/anon" \
-  --package-file ./top100_packages.txt \
-  --heavy-package com.google.android.GoogleCamera \
-  --heavy-package com.google.android.apps.youtube.unplugged \
-  --burst-size 4 \
-  --heavy-per-burst 2 \
-  --hold-ms 200
+  --serial <YOUR_DEVICE_SERIAL> \
+  --from-manifest config/default_memstress_manifest.json
 ```
 
-### 4) 短跑高阶分配 stall trace
+## 文件说明
 
-在确认 workload 能打到 page-cache / mTHP / 驱动或网络高阶分配后，用 `trace_highorder_stalls.py` 捕获 direct reclaim 和 compaction：
+- `config/default_memstress_manifest.json`：默认 memstress + THP stats 采样配置模板，已固定 seed / max_cycles / interval_s。
+- `scripts/run_memstress_and_collect_logs.py`：主脚本。
+- `scripts/derive_metrics.py`：运行结束后由主脚本调用，生成 `derived.csv` 和 `summary.md`。
+- `scripts/utils/`：主脚本依赖的公共模块（adb/su、设备准备、采样、包解析、崩溃检测等）。
+- `references/`：与 adb、memstress 策略、包选择、内核补丁相关的参考文档。
 
-```bash
-python3 scripts/trace_highorder_stalls.py \
-  --serial <SERIAL> \
-  --duration-s 120 \
-  --min-order 2 \
-  --out-dir ./output/highorder_stalls_001
+## 核心指标
+
+重点看 `derived.csv` 里的：
+
+```
+fallback_ratio = Δanon_fault_fallback / (Δanon_fault_alloc + Δanon_fault_fallback)
 ```
 
-它会生成：
-- `raw_trace.txt`：原始 ftrace
-- `stall_events.csv`：每次 direct reclaim / compaction 的 task、pid、order、gfp、reason、duration
-- `stall_summary_by_reason_order.csv`：按 `kind + reason + order + gfp` 聚合次数和时长
-- `stall_summary.md`：短摘要
+含义：
+- `anon_fault_alloc`：anon 64K folio 分配成功次数。
+- `anon_fault_fallback`：anon 64K folio 分配失败回退次数。
 
-离线解析已有 trace：
+计数器是累计单调值，比率必须用相邻采样窗口的 Δ 计算。
 
-```bash
-python3 scripts/trace_highorder_stalls.py \
-  --parse-only ./raw_trace.txt \
-  --out-dir ./output/highorder_stalls_parse_001
-```
+## 常见坑
 
----
-
-## 产出文件
-
-`--out-dir` 下会生成：
-
-- `raw_samples.csv`：每次采样的原始累计值（单调递增计数器）
-- `derived.csv`：每个采样窗口的 Δ 以及 `fallback_ratio`
-- `summary.md`：总体比率 + 简单趋势摘要
-- `monkey/`：`run_monkey.py` 的产物（logcat、stdout/stderr、dumpsys 等）
-- `memstress/`：`run_memstress_and_collect_logs.py` 的产物（轮次日志、resolved activities、logcat、summary）
-- `run_manifest.json`：本次运行的参数、serial、起止时间
-
----
-
-## 关键参数
-
-> 每个 `scripts/run_*.py` 顶部都有一个 `CONFIG` 常量区：默认参数以 `CONFIG` 为准；命令行参数用于按需覆盖。
-
-### run_monkey.py
-
-- `--serial <SERIAL>`：多设备时必填
-- `--duration-s <sec>`：总时长（默认 6h）
-- `--interval-s <sec>`：采样间隔（默认 60s）
-- `--stats-dir <path>`：stats 目录（默认 16KB stats）
-- `--use-su/--no-use-su`：是否用 `su -c` 读 stats / 执行 setup（需要 root）
-- `--device-prepare/--no-device-prepare`：是否执行设备准备（唤醒、解锁、常亮、默认 `setenforce 0`、写 `tracing_on`）
-- `--enable-tracing-on/--no-enable-tracing-on`：设备准备阶段是否写 `1` 到 `/sys/kernel/tracing/tracing_on`（默认开启；本 skill 不会启用任何具体 tracer/event，开销接近零）
-- `--device-prepare-retries <n>`：唤醒重试次数
-- `--device-prepare-retry-s <n>`：唤醒重试间隔
-- `--setup-shell <cmd>`：可重复，运行前执行（建议把开关设置放这）
-- `--apk-dir <dir>`：先批量安装该目录下的 `*.apk`
-- `--thp-ensure-mode <mode>`：通过 `<stats_dir_parent>/enabled` 确保模式（如 `always`；用 `none` 表示只检查不写）
-- `--no-thp-ensure`：跳过 enabled 检查/写入
-- `--monkey global|package`
-- `--monkey-package <pkg>`：`package` 模式必填
-- `--monkey-throttle-ms <ms>`：默认 75
-- `--monkey-events <n>`：不填会按 duration+throttle 估算
-- `--monkey-extra "<flags>"`：追加 monkey flags（原样拼接）
-
-### run_memstress_and_collect_logs.py
-
-- `--serial <SERIAL>`：多设备时必填
-- `--duration-s <sec>`：总时长（默认 6h）
-- `--interval-s <sec>`：采样间隔（默认 60s）
-- `--stats-dir <path>` / `--counters <csv>`：采样源与 counter 列表
-- `--use-su`：使用 `su -c` 读 stats / 执行 root 操作（默认开启；本 skill 假设设备有 su）
-- `--no-network-check`：跳过 `ping 8.8.8.8` 联网检查（默认开启，即默认不检查网络）
-- `--device-prepare/--no-device-prepare`：是否执行设备准备（唤醒、解锁、常亮、默认 `setenforce 0`、写 `tracing_on`）
-- `--enable-tracing-on/--no-enable-tracing-on`：设备准备阶段是否写 `1` 到 `/sys/kernel/tracing/tracing_on`（默认开启；本 skill 不会启用任何具体 tracer/event，开销接近零）
-- `--setup-shell <cmd>`：可重复，运行前执行（建议把开关设置放这）
-- `--thp-ensure-mode <mode>` / `--no-thp-ensure`：同上
-- `--package <pkg>` / `--package-file <file>`：memstress 的目标 app 集合
-- `--heavy-package <pkg>` / `--heavy-package-file <file>`：显式标记重型 app，优先在每轮启动
-- `--burst-size <n>` / `--heavy-per-burst <n>`：每轮启动数量与 heavy 目标数
-- `--selection-mode epoch`：默认使用 epoch 无放回选包；每个 epoch 内不会重复启动同一 app
-- `--epoch-reshuffle/--no-epoch-reshuffle`：是否在 epoch 边界重新打散顺序；默认会重新打散
-- `--hold-ms <ms>`：每次成功启动后 hold（用于“闪进一会再回桌面”的节奏控制；默认 200ms）
-- `--launch-gap-ms <ms>` / `--cycle-sleep-ms <ms>`：启动间隔与轮间隔
-- `--prefer-keywords <csv>`：关键词自动偏置（camera/video/...）
-- `--victim-package <pkg>`：把某个 app 作为 victim 单独 prime/revisit；它可以通过参数从 churn 集合中排除
-- `--victim-exclude-from-churn/--no-victim-exclude-from-churn`：默认把 victim 从 churn 集合排除
-- `--victim-prime-hold-ms <ms>`：victim 初次 prime 的前台停留时间
-- `--victim-revisit-every-cycles <n>` / `--victim-revisit-hold-ms <ms>`：每 N 个 churn cycle 通过正常 launcher 路径回访 victim 一次
-- `--oat-prune-watch`：运行期间轮询目标包并删除重新生成的 `oat/odex/vdex/art`
-- `--oat-prune-package <pkg>` / `--oat-prune-package-file <file>`：覆盖默认 watcher 包集；默认用当前 memstress 已安装目标包
-- `--oat-prune-poll-s <sec>`：watcher 轮询周期；建议从 `2s` 起步
-
----
-
-## 多设备并行（单进程）
-
-> 两个实验脚本都支持：一个进程内对多个设备并行跑（线程池并发）。
-
-常用两种方式：
-
-1) 手动指定多个 serial（可重复或逗号分隔）：
-
-```bash
-python3 scripts/run_monkey.py \
-  --serial SERIAL_A --serial SERIAL_B \
-  --jobs 2 \
-  --out-dir ./output/thp_monkey_fleet_001 \
-  --duration-s 21600 --interval-s 60 \
-  --monkey global
-```
-
-2) 自动跑所有在线设备：
-
-```bash
-python3 scripts/run_memstress_and_collect_logs.py \
-  --all-devices \
-  --jobs 4 \
-  --out-dir ./output/thp_memstress_fleet_001 \
-  --duration-s 21600 --interval-s 60 \
-  --package-file ./top100_packages.txt
-```
-
-输出目录约定：
-- 单设备：产物直接落在 `--out-dir`（或默认 `output/...`）目录下
-- 多设备：按 `--out-dir/<serial>/...` 分层隔离
-
----
-
-## 常见坑 / 稳定性建议
-
-- **计数器是累计值**：一定用 `derived.csv` 里的 Δ 计算比率，而不是直接用 raw。
-- `__GFP_COMP` 只表示 compound page/folio 语义，不等于会同步 compact；是否可能 stall 主要看 `__GFP_DIRECT_RECLAIM`、order、迁移类型、`__GFP_NORETRY/__GFP_RETRY_MAYFAIL`、水线和碎片判断。
-- mTHP anon fault 失败会按可用 order 从高到低重试，最后回退 base page；`anon_fault_fallback` 是 mTHP order 尝试失败计数，不是用户态 fault 最终失败。
-- page-cache large folio 的 fallback 依路径不同：`__filemap_get_folio(FGP_CREAT)` 会降到 mapping min order；readahead high-order 失败会回到普通 readahead，但如果 min order 也被设成 2，fallback 仍然是 order 2。
-- 现有 tracepoint 能观测高阶分配成功和 direct reclaim/compaction stall，不能精确观测所有 driver/network `alloc_pages()` 返回 NULL；精确失败率需要 kretprobe/fprobe/eBPF 或临时 kernel instrumentation。
-- adb 偶发断开：脚本会对采样做重试，失败会记录 `error` 字段但继续跑。
-- adb 显示 `device offline`：参考 `references/adb_device_offline_recovery.md` 的恢复步骤（`adb reconnect offline` / 重启 adb server）。
-- setup 命令带重定向：本工具会统一通过 `sh -c` 执行；需要 root 的话配合 `--use-su`。
-- 某些设备写 `.../enabled` 这类 sysfs 节点时，`adb shell su -c` 不够，必须带 TTY；脚本里的 THP ensure 写入已按这个方式处理。
-- per-size mTHP 节点在不同内核上可能叫 `enabled` 或 `anon`；`preflight_thp_folio_caps.py --mthp-enabled` 会探测并写存在的节点。
-- 同类的 per-filesystem sysfs 节点也可能有这个限制，例如 Pixel 6 上的 `/sys/fs/f2fs/dm-49/max_folio_order_cap` 和 `/sys/fs/ext4/dm-3/max_folio_order_cap`；遇到 `Permission denied` 时优先走 `tty=True` 的 root 执行路径。
-- 某些设备上，monkey 前的亮屏/解锁必须用朴素的 `input keyevent KEYCODE_WAKEUP`、`wm dismiss-keyguard`、`input swipe`；`cmd input keyboard ...` 这类写法可能不会真正把设备从 `Dozing` 拉到 `Awake`。
-- monkey runner 现在默认带 `--ignore-native-crashes`，避免某个 app 的 native crash 直接把整轮 workload 打断；只有显式传 `--abort-on-native-crash` 时才恢复 crash-stop 行为。
-- memstress 只会在你显式传入的 package 集合内循环，不会像 `monkey --global` 那样全域乱跑；如果想强行偏向相机/视频，优先传明确的 `--memstress-heavy-package`，不要只依赖关键词猜测。
-- memstress 当前策略已精简为：`am start`（不带 `-W`）+ hold + HOME，不做 `force-stop`/LRU；详见 `references/memstress_strategy.md`。
-- memstress 现在默认使用“epoch 无放回”轮转：一个 epoch 内每个 app 最多被启动一次，epoch 结束后再重新打散顺序。这比小样本随机抽取更适合做 page-cache 挤压。
-- 如果要做 victim/refault 压力，可只靠参数完成：传 `--victim-package`，并保持 `--victim-exclude-from-churn` 为默认开启；脚本会先 prime victim，再在每 `--victim-revisit-every-cycles` 个 churn cycle 后回访一次 victim。
-- 如果要快速验证“这个负载形态到底有没有开始打出 refault 候选”，优先用 `scripts/run_refault_probe.py`。它会把 `memstress + trace_pipe + 20s drop_caches sidecar + probe_summary.json/md` 串起来，默认 churn `hold_ms=30ms`，并持续输出后台汇总，而不是让你先翻原始 trace。
-- memstress 的 classloading crash 监测现在只会对**目标 workload 包**生效；无关系统包的 `am_crash + ClassNotFoundException` 不会再把整轮实验误停。对应回归测试见 `tests/test_crash_signature.py`。
-- 如果后台 `dex2oat/artd` 会持续把目标包的编译产物补回来，可以开启 `--oat-prune-watch`；watcher 同时覆盖包目录下的 `oat/` 和 `/data/dalvik-cache`，但会明确跳过 `*.tmp`，避免碰发布中的临时文件。对应脚本见 `scripts/watch_oat_prune.py` 和 `tests/test_oat_watch.py`。
-- `watch_live_plot.py` 默认会在 `--out-dir` 下寻找 `<serial>/raw_samples.csv`，更适合 fleet/多设备目录；如果是单设备 direct-out-dir（`raw_samples.csv` 直接落在运行目录根），可把“运行目录的父目录”传给 `--out-dir`，把“运行目录 basename”当作 `--serial`，或者直接手工跑一次 `derive_metrics.py` 做即时对比。
-
----
-
-## Bundled resources
-
-- `config/default_memstress_manifest.json`：默认 memstress 采样配置模板（Agent 最短理解路径入口）
-- `config/README.md`：config 目录说明与模板扩展规则
-- `scripts/run_monkey.py`：跑采样 + monkey（logcat + monkey stdout/stderr + dumpsys）
-- `scripts/run_memstress_and_collect_logs.py`：跑采样 + memstress（logcat + cycle log + dumpsys）
-- `scripts/preflight_thp_folio_caps.py`：记录并可选设置 THP/mTHP/f2fs/ext4 folio cap，检查 high-order stall 所需 tracepoint
-- `scripts/trace_highorder_stalls.py`：捕获 `mm_page_alloc` stack、direct reclaim、compaction，并按 reason/order/gfp 汇总 stall 次数和时长
-- `scripts/utils/alloc_reason.py`：共享高阶分配 stack 分类器（mTHP/page-cache/dma-heap/GPU/WiFi 等）
-- `scripts/run_refault_probe.py`：短跑 refault probe 编排器，串联 `memstress + trace_pipe + 20s drop_caches sidecar + 后台 summary`
-- `scripts/summarize_refault_probe.py`：读取 probe 输出目录，汇总 victim revisit / repeated `(mm,tgid,ino,pgoff)` / contention analyzer 摘要
-- `scripts/launch_memstress_detached.sh`：可靠后台启动 memstress（setsid + pidfile + stdout/stderr）
-- `scripts/launch_memstress_uc_douyin_huoshan_detached.sh`：三 app 循环一键后台启动（UC + 抖音 + 火山）
-- `scripts/watch_oat_prune.py`：独立 sidecar watcher，轮询目标包并删除 regenerated `oat/odex/vdex/art`（跳过 `*.tmp`）
-- `scripts/plot_derived_svg.py`：把 `derived.csv` 画成 `SVG`（无 matplotlib/pandas 依赖；支持多设备多曲线）
-- `scripts/watch_live_plot.py`：长测期间定期从 `raw_samples.csv` 生成临时 `derived.csv` 并更新对比 `SVG`（`latest/` + `archive/`，支持 `fallback_ratio` / `cumulative_fallback` / `cumulative_ratio`）
-
-### 绘图示例（无 matplotlib）
-
-单设备：
-
-```bash
-python3 scripts/plot_derived_svg.py ./output/thp_memstress_run_001/derived.csv --out-dir ./output/plot_run_001
-```
-
-双设备对比（同一 out_dir 下的两个 serial 子目录）：
-
-```bash
-python3 scripts/plot_derived_svg.py \
-  ./output/thp_memstress_fleet_001/<SERIAL_A>/derived.csv \
-  ./output/thp_memstress_fleet_001/<SERIAL_B>/derived.csv \
-  --align absolute \
-  --out-dir ./output/plot_fleet_001
-```
-
-单设备 detached run 的 live plot：
-
-```bash
-RUN=./output/memstress_20260420_220754_1A071FDF600053
-python3 scripts/watch_live_plot.py \
-  --out-dir "$(dirname "$RUN")" \
-  --serial "$(basename "$RUN")" \
-  --plot-dir "$RUN/live_plot" \
-  --every-s 30 \
-  --align absolute \
-  --metric cumulative_fallback
-```
-- `scripts/run_experiment.py`：兼容 wrapper（deprecated）
-- `scripts/derive_metrics.py`：把 raw CSV 变成 derived+summary
-- `scripts/compare_derived.py`：对比两个 `derived.csv`（有 matplotlib 时输出对比图）
-- `scripts/apk_batch_install.py`：来自 wechat-wxapkg-and-apk-batch-tools（批量安装逻辑请参阅该 skill 的 SKILL.md）
-- `scripts/run_thp_memstress_top100_dual_9h.sh`：双设备一键编排（可选批量安装 top100 APK + 9h memstress + 画图）
-- `scripts/adb_pkg.sh`, `scripts/adb_helpers.sh`
-- `scripts/utils/`：公共函数（adb/tty/su、设备亮屏解锁常亮、采样、THP ensure、out-dir/setup/install 工具函数）
-- `references/adb_execution_reference.md`, `references/monkey_flags.md`
-- `references/apk_batch_install_flatten_dir.md`：当 APK 分散在多个目录时的“扁平化”安装目录做法 + 常见 install 失败排查
-- `references/long_run_detach.md`：在 Codex/非交互环境里可靠地后台启动多小时任务（setsid + pidfile）
-- `references/app_subset_selection.md`：为 flash-kill/短周期 churn 挑选 ≤20 个“重型 app”子集的建议与校验规则
-- `references/memstress_strategy.md`：memstress 简化策略（`am start` + hold + HOME，不 force-stop）
-- `references/memstress_package_validation.md`：解释 memstress 为什么要校验/解析包名
-- `references/fleet_parallel.md`：解释单进程多设备并行与输出目录分层
-
----
+- **设备需要 root**：读取 `/sys/kernel/mm/transparent_hugepage/.../stats` 需要 root。默认用 `su -c`；如果已经 `adb root`，传 `--no-use-su`。
+- **stats 目录自动探测**：不需要在 manifest 里写 `stats_dir`，脚本会根据 `/.../enabled` 中 `[always]` 的节点自动选择对应 `stats` 目录。
+- **计数器是累计值**：用 `derived.csv` 的 Δ，不要直接对 `raw_samples.csv` 算比率。
+- **adb 偶发断开**：采样失败会记录到 `raw_samples.csv` 的 `error` 字段并继续。
+- **packages 未安装**：脚本会自动过滤，只启动已安装的包。
+- **manifest 里的 seed 固定**：默认 `20260617`；换 seed 会得到不同的包启动顺序，但同一 seed 可复现。
 
 ## Workflow Contract
 
 ### Main Workflow
-1. Preflight：运行 `scripts/preflight_thp_folio_caps.py`，记录 THP defrag、mTHP anon、f2fs/ext4 folio cap 和 tracepoint 可用性。
-2. Source confirmation：运行 `scripts/trace_page_alloc.py --min-order 2`，确认 workload 确实命中 mTHP、page-cache、网络/驱动/GPU 高阶分配 stack。
-3. Stall trace：运行 `scripts/trace_highorder_stalls.py --min-order 2`，捕获 direct reclaim 和 compaction begin/end，并按 reason/order/gfp 汇总。
-4. Fallback ratio：需要 mTHP 趋势时，同时或随后运行 `run_memstress_and_collect_logs.py` / `run_monkey.py` 采集 `raw_samples.csv`，用 `derived.csv` 计算 mTHP fallback ratio。
-5. Report / handoff：报告 `preflight.md`、source trace 命中情况、`stall_summary_by_reason_order.csv`、mTHP fallback ratio，并明确哪些失败率是现有 tracepoint 无法精确回答的。
-
-### Decision Table
-| Phase | Trigger / Symptom | Action | Verify | On Failure | Workflow Effect |
-|---|---|---|---|---|---|
-| Preflight | f2fs/ext4 folio cap 节点缺失 | 不假设 min/max 都可控；记录存在的节点和实际值 | `preflight.md` 列出 cap 节点 | 若目标必须 min=max=2，停止并说明缺失节点 | block / branch |
-| Preflight | tracepoint 缺失 | 只运行可用 tracepoint；缺失项写入报告 | `tracefs.required_events` | 缺 direct reclaim/compaction 时不能声明 stall 计数 | branch |
-| Source confirmation | `trace_page_alloc.py` 未命中目标 reason | 调整 workload（camera/douyin/memstress 包集、hold、interaction）后重跑 source trace | `analysis.txt` / `stacks.json` 有目标 stack | 仍未命中则不要进入归因长测 | block |
-| Stall trace | `stall_events.csv` reason 为 `unknown` 比例高 | 扩展 `scripts/utils/alloc_reason.py` 的 stack pattern，并保留 raw stack 样本 | 单元测试覆盖新增 pattern | 无法分类时按 unknown 报告，不强行归因 | continue |
-| Failure ratio | 需要 driver/network/GPU alloc failure ratio | 说明现有 tracepoint 只能看成功分配和 stall；改用 kretprobe/fprobe/eBPF 或 kernel instrumentation | entry/return 记录包含 NULL return | 设备不支持时只报告可观测上限 | branch |
-| Interpretation | 看到 `__GFP_COMP` | 不把它当作 stall 证据；检查 gfp 是否含 `__GFP_DIRECT_RECLAIM` 和 allocator slowpath trace | `stall_summary_by_reason_order.csv` 中有 direct reclaim/compaction | 无 stall event 则只报告 high-order allocation pressure | continue |
+1. 准备设备：确保 adb 连接、已 root、已安装 manifest 中的部分包。
+2. 运行：用默认 manifest 执行 `run_memstress_and_collect_logs.py`。
+3. 等待运行结束（或按 Ctrl-C 停止）。
+4. 验证：检查 `derived.csv` 的 `fallback_ratio` 列和 `summary.md`。
+5. 报告：输出 `summary.md`、关键比率趋势、以及 `run_manifest.json`。
 
 ### Output Contract
-- phase reached:
-- decision path taken:
-- verification evidence:
-- fallback used:
-- unresolved blocker:
-- next workflow step:
+- 运行脚本：`scripts/run_memstress_and_collect_logs.py`
+- 使用 manifest：`config/default_memstress_manifest.json`
+- 输出目录：`--out-dir` 指定，或默认 `/tmp/thp_memstress_<timestamp>`
+- 关键产物：`derived.csv`（含 `fallback_ratio`）、`summary.md`（含 `anon_alloc`/`anon_fallback`/`fallback_ratio`/`alloc_stall`/`compact_stall`，均为 end - start）、`run_manifest.json`
+
+## Precondition (独立脚本)
+
+在 memstress 之前运行，制造碎片化初始状态。**必须在 THP never 下执行**（脚本自动设置）。
+
+```bash
+python3 scripts/precondition.py --serial <SERIAL> --alloc-mb 5000 --threshold 2000
+```
+
+- 自动重启设备、等待 su 就绪
+- 强制 THP never → 运行 fragmem（全 order-0 分配 + munmap 碎片化）
+- fragmem 在后台 hold 内存，实验结束后 `killall fragmem`
+
+流程顺序：
+1. `precondition.py`（重启 + 碎片化，THP never）
+2. 设 THP / sysctl 配置（此时不设 compaction 开关）
+3. `run_memstress_and_collect_logs.py --post-prepare-cmd '...'`（温控 → 锁频 → post-prepare 设 compaction → workload）
+
+**规则**：precondition 后不再重启，碎片状态通过 fragmem hold 保持。
+
+## CPU Accounting (独立脚本)
+
+采集 kcompactd/kswapd CPU 时间 + direct reclaim/compact 精确耗时。与主脚本解耦。
+
+```bash
+# 在 memstress 前启动 trace:
+python3 scripts/trace_cpu_accounting.py start --serial <SERIAL> --out-dir <RUN_DIR>
+
+# (跑 memstress)
+
+# memstress 结束后收集:
+python3 scripts/trace_cpu_accounting.py stop --serial <SERIAL> --out-dir <RUN_DIR>
+
+# 离线分析:
+python3 scripts/trace_cpu_accounting.py analyze --out-dir <RUN_DIR>
+```
+
+产出：
+- `schedstat_start.json` / `schedstat_end.json`：kcompactd/kswapd 的 on_cpu_ns, wait_ns, timeslices
+- `ftrace_mm.txt`：raw ftrace（mm_vmscan_direct_reclaim_begin/end, mm_compaction_begin/end）
+- `direct_reclaim_stats.json`：解析后的 direct reclaim/compact 总耗时和次数
+
+**规则**：
+- trace 脚本不影响主脚本的任何行为
+- schedstat 零开销（读 /proc）
+- ftrace mm instance 独立 buffer，事件量小（几万级），开销可忽略
+- 随机种子永远不动：`20260617`

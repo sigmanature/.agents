@@ -1,3 +1,0 @@
-[2026-06-15T16:42:09.234490] stats_dir=/sys/kernel/mm/transparent_hugepage/hugepages-16kB/stats enabled_path=/sys/kernel/mm/transparent_hugepage/hugepages-16kB/enabled
-before: always inherit madvise [never]
-after: [always] inherit madvise never

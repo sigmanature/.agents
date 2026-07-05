@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kiro CLI Agent Config Debug"
+  short_description: "Debug Kiro CLI agent tool mounting, trust, and path permissions."
+  default_prompt: "Debug why a Kiro CLI agent is printing tool-use text, asking for tool approval, or failing to access paths outside the workspace."

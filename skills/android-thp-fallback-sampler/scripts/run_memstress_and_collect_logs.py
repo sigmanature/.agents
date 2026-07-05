@@ -35,8 +35,10 @@ from utils.pkg_utils import read_package_file
 from utils.sampling_utils import DEFAULT_COUNTERS, DEFAULT_STATS_DIR, run_derive_metrics, sample_loop, write_run_manifest
 from utils.thp_utils import ensure_thp_mode_for_stats
 from utils.buddyinfo_utils import buddyinfo_sample_loop
-from utils.vmstat_utils import derive_vmstat_csv, vmstat_sample_loop
+from utils.vmstat_utils import derive_vmstat_csv, read_vmstat, vmstat_sample_loop
 from utils.interactive import interactive_click_loop
+from precondition_memory import run_precondition, load_packages_from_manifest as _load_pkgs_manifest
+from fragmem_host import run_fragmem_precondition, stop_fragmem
 
 
 # === CONFIG (overridable via CLI or --from-manifest) ===
@@ -150,6 +152,26 @@ def ensure_network(serial: str):
         time.sleep(5)
 
 
+# --------------- vmstat snapshot helpers ---------------
+
+def record_vmstat_start(serial: str, out_dir: Path, use_su: bool) -> dict:
+    """Record initial /proc/vmstat at prepare time; write vmstat_start.json."""
+    values = read_vmstat(serial, use_su=use_su)
+    (out_dir / "vmstat_start.json").write_text(
+        json.dumps(values, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8")
+    return values
+
+
+def record_vmstat_end(serial: str, out_dir: Path, use_su: bool) -> dict:
+    """Record final /proc/vmstat after workload; write vmstat_end.json."""
+    values = read_vmstat(serial, use_su=use_su)
+    (out_dir / "vmstat_end.json").write_text(
+        json.dumps(values, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8")
+    return values
+
+
 # --------------- stats-dir auto-detect ---------------
 
 def auto_detect_stats_dir(serial: str, use_su: bool) -> str:
@@ -246,6 +268,17 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
         ensure_thp_mode_for_stats(serial, stats_dir=stats_dir, desired_mode="always",
                                   use_su=use_su, retries=3, retry_sleep_s=2,
                                   log_path=out_dir / "thp_ensure_log.txt")
+
+    # --- post-prepare hook (e.g. set compaction sysctl after cool-down + lock-freq) ---
+    post_cmd = getattr(args, 'post_prepare_cmd', None)
+    if post_cmd:
+        print(f"[{serial}] post-prepare: {post_cmd}")
+        subprocess.run(
+            ["adb", "-s", serial, "shell", f"su -c '{post_cmd}'"],
+            capture_output=True, text=True, timeout=30)
+
+    # --- vmstat baseline snapshot (before workload) ---
+    vmstat_start = record_vmstat_start(serial, out_dir, use_su)
 
     # --- package resolution ---
     valid_pkgs = validate_packages(serial, packages)
@@ -436,8 +469,31 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
 
     sampler_thread.join(timeout=10)
 
+    # --- kill fragmem if it was started ---
+    if getattr(args, 'precondition', False):
+        try:
+            stop_fragmem(serial, use_su=use_su)
+        except Exception:
+            pass
+
+    # --- post-workload hook ---
+    post_wl_cmd = getattr(args, 'post_workload_cmd', None)
+    if post_wl_cmd:
+        print(f"[{serial}] post-workload: {post_wl_cmd}")
+        subprocess.run(
+            ["adb", "-s", serial, "shell", f"su -c '{post_wl_cmd}'"],
+            capture_output=True, text=True, timeout=30)
+
+    # --- vmstat final snapshot (after workload) ---
+    record_vmstat_end(serial, out_dir, use_su)
+
     # derive metrics
-    run_derive_metrics(scripts_dir=Path(__file__).resolve().parent, out_dir=out_dir)
+    run_derive_metrics(
+        scripts_dir=Path(__file__).resolve().parent,
+        out_dir=out_dir,
+        vmstat_start=out_dir / "vmstat_start.json",
+        vmstat_end=out_dir / "vmstat_end.json",
+    )
     vmstat_samples = out_dir / "vmstat_samples.csv"
     if vmstat_samples.exists():
         derive_vmstat_csv(vmstat_samples, out_dir / "vmstat_derived.csv")
@@ -462,7 +518,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--interval-s", type=int, default=CONFIG["interval_s"])
     p.add_argument("--stats-dir", default=CONFIG["stats_dir"], help="Auto-detected if omitted")
     p.add_argument("--counters", default=",".join(CONFIG["counters"]))
-    p.add_argument("--use-su", action="store_true", default=CONFIG["use_su"])
+    p.add_argument("--use-su", action=argparse.BooleanOptionalAction, default=CONFIG["use_su"],
+                   help="Wrap root commands with su -c (default: True). Use --no-use-su if adb root is already enabled.")
     p.add_argument("--package", action="append", default=None, help="Target package (repeatable)")
     p.add_argument("--package-file", default=None, help="File with one package per line")
     p.add_argument("--burst-size", type=int, default=CONFIG["memstress"]["burst_size"])
@@ -492,6 +549,20 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="During device prepare, write 1 to /sys/kernel/tracing/tracing_on (default: on). No events are enabled, so overhead is near zero.",
     )
     p.add_argument("--from-manifest", default=None, help="Load all params from a previous run_manifest.json")
+    p.add_argument("--post-prepare-cmd", default=None,
+                   help="Shell command to run on device (via su) after device-prepare but before workload. "
+                        "Use for setting compaction sysctl after cool-down.")
+    p.add_argument("--post-workload-cmd", default=None,
+                   help="Shell command to run on device (via su) after workload ends but before vmstat_end. "
+                        "Use for stopping simpleperf etc.")
+
+    # Preconditioning options (fragmem-based)
+    p.add_argument("--precondition", action="store_true", default=False,
+                   help="Run fragmem preconditioning to fragment memory before memstress")
+    p.add_argument("--precondition-threshold", type=int, default=2000,
+                   help="Buddyinfo sum(order>=2) threshold for fragmem (default: 2000)")
+    p.add_argument("--precondition-alloc-mb", type=int, default=4000,
+                   help="Total MB for fragmem to allocate (default: 5000)")
 
     args = p.parse_args(argv)
 

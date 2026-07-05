@@ -1,8 +1,0 @@
-[21121FDF600C4G] network OK
-[21121FDF600C4G][memstress] cycle=1 launched=4 errors=0
-[21121FDF600C4G][memstress] cycle=2 launched=4 errors=0
-[21121FDF600C4G][memstress] cycle=3 launched=0 errors=4
-[21121FDF600C4G][memstress] cycle=4 launched=0 errors=4
-[21121FDF600C4G][memstress] cycle=5 launched=0 errors=4
-{"serial": "21121FDF600C4G", "cycles": 5, "rounds": 1, "launched_total": 8, "runnable_packages": 97, "heavy_packages": ["com.qiyi.video", "com.ss.android.article.video", "com.videogo"], "stopped_by_signal": false, "crash_signature_found": false}
-[21121FDF600C4G] out_dir=/home/nzzhao/.agents/skills/android-thp-fallback-sampler/scripts/../../../output/buddyinfo_hypothesis_20260615_135503/21 samples=1 errors=0

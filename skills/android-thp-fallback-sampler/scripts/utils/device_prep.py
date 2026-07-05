@@ -27,12 +27,12 @@ def wait_for_cool_down(
     max_temps: dict = None,
     poll_s: int = 10,
     max_wait_s: int = 1200,
-    stable_samples: int = 5,
+    stable_samples: int = 3,
 ) -> dict:
     if zones is None:
         zones = ["thermal_zone0", "thermal_zone2"]
     if max_temps is None:
-        max_temps = {"thermal_zone0": 45.0, "thermal_zone2": 55.0}
+        max_temps = {"thermal_zone0": 50.0, "thermal_zone2": 55.0}
     t0 = time.time()
     stable_count = 0
     while True:
@@ -113,6 +113,11 @@ def ensure_awake_unlocked_and_stay_awake(
         for prep_cmd, label in (
             ("setenforce 0 2>/dev/null || true", "setenforce 0"),
             ("echo 1 > /sys/kernel/tracing/tracing_on 2>/dev/null || true", "enable tracing_on"),
+            # Lock CPU frequencies to max for stable measurements
+            ("for i in 0 1 2 3 4 5 6 7; do "
+             "maxf=$(cat /sys/devices/system/cpu/cpu$i/cpufreq/scaling_max_freq 2>/dev/null) && "
+             "echo $maxf > /sys/devices/system/cpu/cpu$i/cpufreq/scaling_min_freq 2>/dev/null; "
+             "done", "lock_cpu_freq"),
         ):
             if label.startswith("enable tracing") and not enable_tracing_on:
                 continue

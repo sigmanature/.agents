@@ -1,2 +1,0 @@
-[write] /sys/kernel/mm/readahead/min_order before=2
-[write] /sys/kernel/mm/readahead/min_order desired=2
