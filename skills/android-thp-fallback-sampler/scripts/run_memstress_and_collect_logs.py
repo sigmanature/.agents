@@ -20,6 +20,8 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -80,6 +82,40 @@ def validate_packages(serial: str, pkgs: Sequence[str]) -> List[str]:
     return [p for p in pkgs if p in installed]
 
 
+def _extract_component_from_line(line: str, pkg: str) -> Optional[str]:
+    for token in line.split():
+        if "/" not in token:
+            continue
+        token = token.rstrip(":")
+        if token.startswith(pkg + "/") or token.startswith(pkg + ".") or token.startswith(pkg + "$"):
+            return token
+        if re.match(r"^[A-Za-z0-9_.]+/", token):
+            return token
+    return None
+
+
+def _resolve_activity_from_dumpsys(output: str, pkg: str) -> Optional[str]:
+    lines = output.splitlines()
+    for index, raw_line in enumerate(lines):
+        if "android.intent.action.MAIN:" not in raw_line:
+            continue
+        search_end = min(len(lines), index + 80)
+        candidate: Optional[str] = None
+        for next_line in lines[index + 1:search_end]:
+            stripped = next_line.strip()
+            if not stripped:
+                continue
+            if stripped.endswith(":") and not stripped.startswith("Category:"):
+                break
+            extracted = _extract_component_from_line(stripped, pkg)
+            if extracted is not None:
+                candidate = extracted
+                continue
+            if candidate is not None and 'Category: "android.intent.category.LAUNCHER"' in stripped:
+                return candidate
+    return None
+
+
 def resolve_activity(serial: str, pkg: str) -> Optional[str]:
     out = adb_shell(serial, f"pm resolve-activity --brief {pkg}", timeout_s=10, check=False, use_su=False)
     for line in out.splitlines():
@@ -88,18 +124,31 @@ def resolve_activity(serial: str, pkg: str) -> Optional[str]:
             return line
     # fallback: cmd package resolve-activity
     out2 = adb_shell(serial,
-        f"cmd package resolve-activity --brief -c android.intent.category.LAUNCHER {pkg}",
+        f"cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER {pkg}",
         timeout_s=10, check=False, use_su=False)
     for line in out2.splitlines():
         line = line.strip()
         if "/" in line:
             return line
+    out3 = adb_shell(serial, f"dumpsys package {pkg}", timeout_s=20, check=False, use_su=False)
+    resolved = _resolve_activity_from_dumpsys(out3, pkg)
+    if resolved is not None:
+        return resolved
     return None
 
 
-def start_activity(serial: str, component: str):
-    subprocess.run(["adb", "-s", serial, "shell", "am", "start", "-n", component],
-                   capture_output=True, timeout=20)
+def start_activity(serial: str, component: str) -> str:
+    # `adb shell` ultimately goes through the guest shell.  Activity names for
+    # nested classes contain `$`, so the component must be quoted as one shell
+    # word; passing it as a separate adb argv still lets the guest shell expand `$`.
+    shell_cmd = "am start -W -n " + shlex.quote(component)
+    cp = subprocess.run(["adb", "-s", serial, "shell", shell_cmd],
+                        capture_output=True, text=True, timeout=30)
+    output = ((cp.stdout or "") + (cp.stderr or "")).strip()
+    bad_markers = ["Error:", "Exception", "not found", "does not exist", "result=", "Status: timeout"]
+    if cp.returncode != 0 or any(marker in output for marker in bad_markers):
+        raise RuntimeError(f"am start failed for {component}: rc={cp.returncode} output={output[:400]}")
+    return output
 
 
 def exit_to_home(serial: str):
@@ -223,6 +272,10 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
     out_dir.mkdir(parents=True, exist_ok=True)
     memstress_out = out_dir / "memstress"
     memstress_out.mkdir(parents=True, exist_ok=True)
+    for stale_name in ("launch_failures.txt", "cycle_log.jsonl", "cycle_timing.json", "cycle_timing.md"):
+        stale_path = memstress_out / stale_name
+        if stale_path.exists():
+            stale_path.unlink()
 
     use_su = bool(args.use_su)
     stats_dir = args.stats_dir or auto_detect_stats_dir(serial, use_su)
@@ -390,6 +443,7 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
     rng = random.Random(seed)
     cycle_log_f = (memstress_out / "cycle_log.jsonl").open("w", encoding="utf-8")
     cycle_start_ts: List[float] = []  # per-cycle wall-clock entry timestamps
+    launch_failures: List[str] = []
 
     try:
         for cycle in range(1, max_cycles + 1):
@@ -419,6 +473,11 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
                          "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
             cycle_log_f.write(json.dumps(cycle_row, ensure_ascii=False) + "\n")
             cycle_log_f.flush()
+
+            if errors or not launched:
+                launch_failures.extend(errors or ["no components launched"])
+                print(f"[{serial}] launch gate failed at cycle {cycle}: launched={len(launched)} errors={len(errors)}", file=sys.stderr)
+                break
 
             if cycle % 10 == 0:
                 print(f"[{serial}] cycle {cycle}/{max_cycles} launched={len(launched)}")
@@ -497,6 +556,17 @@ def run_one_device(serial: str, out_dir: Path, packages: List[str],
     vmstat_samples = out_dir / "vmstat_samples.csv"
     if vmstat_samples.exists():
         derive_vmstat_csv(vmstat_samples, out_dir / "vmstat_derived.csv")
+
+    if launch_failures:
+        (memstress_out / "launch_failures.txt").write_text(
+            "\n".join(launch_failures) + "\n", encoding="utf-8")
+        manifest["status"] = "failed_launch_gate"
+        manifest["end_host_ts"] = int(time.time())
+        manifest["samples"] = sampling_result["samples"]
+        manifest["sample_errors"] = sampling_result["errors"]
+        manifest["launch_failures"] = launch_failures[:20]
+        write_run_manifest(out_dir / "run_manifest.json", manifest)
+        raise RuntimeError(f"launch gate failed: {launch_failures[0]}")
 
     manifest["status"] = "finished"
     manifest["end_host_ts"] = int(time.time())

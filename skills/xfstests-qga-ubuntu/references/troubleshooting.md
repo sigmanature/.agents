@@ -104,3 +104,35 @@ python3 /home/nzzhao/learn_os/.agents/tools/qga_exec.py 'pkill -f install_xfstes
 ```
 
 Then rerun installer script.
+
+## I) QGA waits forever after launching a background long run
+
+Symptom:
+
+- `qga_exec.py` submits a command that starts a background runner, but the host-side QGA call keeps waiting.
+- A separate status command shows the guest runner is alive with a valid PID/PGID.
+
+Cause:
+
+- The detached child inherited stdout/stderr from the QGA `guest-exec` command, so QGA keeps waiting for output closure.
+
+Fix:
+
+- Redirect detached children to durable log files before returning from the QGA command.
+- Record PID and PGID, then manage the run with explicit `status` and `stop` commands.
+- If a host-side `qga_exec.py` wait is already stuck, interrupt only the host wait after verifying the guest runner is alive; do not kill the guest PGID.
+
+## J) `mkfs.f2fs -U <uuid>` fails in the guest
+
+Symptom:
+
+```text
+Error: supplied string is not a valid UUID
+Error: Failed to prepare a super block!!!
+```
+
+Fix:
+
+- Run a preflight `mkfs.f2fs -f -U <uuid> <dev>` before putting `MKFS_OPTIONS=-U ...` into `local.config`.
+- If the guest f2fs-tools rejects UUID options, omit `MKFS_OPTIONS` for cases that do not require stable filesystem UUIDs.
+- Keep fscrypt/UUID-sensitive cases isolated until f2fs-tools is fixed or replaced.

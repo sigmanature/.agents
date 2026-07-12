@@ -30,6 +30,10 @@ VMSTAT_KEYS = [
     "alloc_fail_fragment",
     "alloc_stall_wmark",
     "alloc_stall_fragment",
+    "anon_mthp_vma_unsuitable_order2",
+    "cow_mthp_order2",
+    "cow_mthp_fallback_order0",
+    "cow_mthp_vma_unsuitable_order2",
     "kcompactd_timeout_wake",
     "kcompactd_wake_request",
     "kcompactd_woke_by_alloc",
@@ -39,6 +43,17 @@ VMSTAT_KEYS = [
     "kcompactd_wake_from_alloc",
     "pageoutrun",
     "kswapd_inodesteal",
+    "pgfault",
+    "pgmajfault",
+    "workingset_refault_anon",
+    "workingset_refault_file",
+    "pswpout",
+    "zswpout",
+    "swpout_zero",
+    "thp_fault_alloc",
+    "thp_fault_fallback",
+    "thp_swpout",
+    "thp_swpout_fallback",
 ]
 
 
