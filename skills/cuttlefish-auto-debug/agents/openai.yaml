@@ -1,3 +1,0 @@
-interface:
-  display_name: "Cuttlefish Auto Debug"
-  short_description: "Boot Cuttlefish, verify adb-root/tracefs, capture perfetto syscall+f2fs traces, and bundle evidence for Android storage regressions"

@@ -55,6 +55,14 @@ This script starts QEMU in background and blocks until readiness is confirmed:
 Do not run separate post-start verification commands. The script IS the verification.
 If the script exits non-zero, read the `status=...` and `reason=...` output and act accordingly.
 
+If the workspace-local `vm_start_bg.sh` does not actually print the readiness
+contract above, or if it exits 0 but no real `qemu-system-aarch64` process
+remains, treat the wrapper result as a false-positive startup. In that case,
+fall back to a foreground PTY launch with `myscripts/qemu_start_ori.sh` and keep
+guest work on QGA/SSH after the handshake. This is a branch, not a success path:
+record the false-positive evidence and do not claim the VM is ready until the
+real process, sockets, and QGA handshake pass.
+
 If the launcher log shows a host-forwarding error such as `Could not set up host forwarding rule`, treat that as a strong signal that another QEMU instance may already be holding the forwarded port. In that situation, inspect the existing QEMU process list first and prefer reusing the already-running VM instead of claiming the new launch succeeded.
 
 Note: the guest can be controlled either via **SSH** (when available) or via **QEMU Guest Agent (QGA)** using `.agents/tools/qga_exec.py` (when SSH is unavailable/blocked or the user requests QGA).
@@ -261,6 +269,8 @@ When the task is about F2FS behavior, mount behavior, on-disk effects, regressio
 - Reference (code-path overview): [`references/f2fs-verity-buffered-writeback-flow.md`](references/f2fs-verity-buffered-writeback-flow.md)
 - Reference (interface mapping): [`references/f2fs-sysfs-procfs-interface.md`](references/f2fs-sysfs-procfs-interface.md)
 - Reference (knob usage + adding): [`references/f2fs-sysfs-knobs-usage-and-adding.md`](references/f2fs-sysfs-knobs-usage-and-adding.md)
+- Reference (fscrypt inlinecrypt/fallback bounce triage): [`references/fscrypt-inlinecrypt-bounce-diagnosis.md`](references/fscrypt-inlinecrypt-bounce-diagnosis.md)
+- Reference (xfstests F2FS/QEMU triage): [`references/xfstests-f2fs-qemu-triage.md`](references/xfstests-f2fs-qemu-triage.md)
 
 
 ### Tracefs-first debugging pattern

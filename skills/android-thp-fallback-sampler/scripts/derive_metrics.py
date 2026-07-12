@@ -121,6 +121,7 @@ def write_derived(raw: List[Row], out_csv: Path) -> None:
 
 VMSTAT_ALLOCSTALL_KEYS = ("allocstall_normal", "allocstall_movable")
 VMSTAT_COMPACT_KEYS = ("compact_stall",)
+VMSTAT_SWAPOUT_KEYS = ("pswpout", "zswpout", "swpout_zero")
 
 
 def read_vmstat_json(path: Path) -> Dict[str, int]:
@@ -157,6 +158,12 @@ def compute_vmstat_delta(start_path: Path, end_path: Path) -> Dict[str, Optional
     return {
         "alloc_stall": alloc_stall_end - alloc_stall_start,
         "compact_stall": compact_stall_end - compact_stall_start,
+        "pswpout": end.get("pswpout", 0) - start.get("pswpout", 0),
+        "zswpout": end.get("zswpout", 0) - start.get("zswpout", 0),
+        "swpout_zero": end.get("swpout_zero", 0) - start.get("swpout_zero", 0),
+        "swapout_total_pages": _get(end, VMSTAT_SWAPOUT_KEYS) - _get(start, VMSTAT_SWAPOUT_KEYS),
+        "thp_swpout": end.get("thp_swpout", 0) - start.get("thp_swpout", 0),
+        "thp_swpout_fallback": end.get("thp_swpout_fallback", 0) - start.get("thp_swpout_fallback", 0),
     }
 
 
@@ -165,6 +172,9 @@ def write_summary(derived_csv: Path, out_md: Path,
     alloc_total = 0
     fallback_total = 0
     attempts_total = 0
+    order2_swpout_folios = 0
+    order2_zswpout_folios = 0
+    order2_swpout_fallback = 0
 
     with derived_csv.open("r", encoding="utf-8") as f:
         r = csv.DictReader(f)
@@ -178,12 +188,27 @@ def write_summary(derived_csv: Path, out_md: Path,
                 fallback_total += int(fb)
             if at.lstrip("-").isdigit():
                 attempts_total += int(at)
+            swpout = (d.get("d_swpout") or "").strip()
+            zswpout = (d.get("d_zswpout") or "").strip()
+            swpout_fallback = (d.get("d_swpout_fallback") or "").strip()
+            if swpout.lstrip("-").isdigit():
+                order2_swpout_folios += int(swpout)
+            if zswpout.lstrip("-").isdigit():
+                order2_zswpout_folios += int(zswpout)
+            if swpout_fallback.lstrip("-").isdigit():
+                order2_swpout_fallback += int(swpout_fallback)
 
     overall_ratio = (fallback_total / attempts_total) if attempts_total > 0 else None
 
     vmstat_delta = vmstat_delta or {}
     alloc_stall = vmstat_delta.get("alloc_stall")
     compact_stall = vmstat_delta.get("compact_stall")
+    swapout_total_pages = vmstat_delta.get("swapout_total_pages")
+    pswpout = vmstat_delta.get("pswpout")
+    zswpout = vmstat_delta.get("zswpout")
+    swpout_zero = vmstat_delta.get("swpout_zero")
+    thp_swpout = vmstat_delta.get("thp_swpout")
+    thp_swpout_fallback = vmstat_delta.get("thp_swpout_fallback")
 
     def _fmt(v: Optional[int]) -> str:
         if v is None:
@@ -191,6 +216,15 @@ def write_summary(derived_csv: Path, out_md: Path,
         return str(v)
 
     ratio_str = f"{overall_ratio:.6f}" if overall_ratio is not None else "N/A"
+
+    order2_swapout_folios = order2_swpout_folios + order2_zswpout_folios
+    order2_swapout_pages = order2_swapout_folios * 4
+    order0_swapout_pages_est = None
+    order2_swapout_page_ratio = None
+    if swapout_total_pages is not None:
+        order0_swapout_pages_est = max(0, swapout_total_pages - order2_swapout_pages)
+        if swapout_total_pages > 0:
+            order2_swapout_page_ratio = order2_swapout_pages / swapout_total_pages
 
     lines: List[str] = [
         "# THP 16KB Anon Fallback Summary\n",
@@ -202,11 +236,26 @@ def write_summary(derived_csv: Path, out_md: Path,
         f"| fallback_ratio | {ratio_str} |",
         f"| alloc_stall | {_fmt(alloc_stall)} |",
         f"| compact_stall | {_fmt(compact_stall)} |\n",
+        f"| pswpout_pages | {_fmt(pswpout)} |",
+        f"| zswpout_pages | {_fmt(zswpout)} |",
+        f"| swpout_zero_pages | {_fmt(swpout_zero)} |",
+        f"| swapout_total_pages | {_fmt(swapout_total_pages)} |",
+        f"| order2_16k_swpout_folios | {order2_swpout_folios} |",
+        f"| order2_16k_zswpout_folios | {order2_zswpout_folios} |",
+        f"| order2_16k_swpout_fallback | {order2_swpout_fallback} |",
+        f"| order2_16k_swapout_pages_est | {order2_swapout_pages} |",
+        f"| order0_swapout_pages_est | {_fmt(order0_swapout_pages_est)} |",
+        f"| order2_16k_swapout_page_ratio | {order2_swapout_page_ratio:.6f} |" if order2_swapout_page_ratio is not None else "| order2_16k_swapout_page_ratio | N/A |",
+        f"| thp_swpout_pmd_folios | {_fmt(thp_swpout)} |",
+        f"| thp_swpout_fallback_pmd_folios | {_fmt(thp_swpout_fallback)} |\n",
         "- **anon_alloc**: total `anon_fault_alloc` during the experiment (THP stats end - start).",
         "- **anon_fallback**: total `anon_fault_fallback` during the experiment (THP stats end - start).",
         "- **fallback_ratio**: `anon_fallback / (anon_alloc + anon_fallback)`.",
         "- **alloc_stall**: `allocstall_normal + allocstall_movable` from `/proc/vmstat` (end - start).",
         "- **compact_stall**: `compact_stall` from `/proc/vmstat` (end - start).",
+        "- **order2_16k_swapout_pages_est**: `4 * (d_swpout + d_zswpout)` from the active 16KB mTHP stats directory.",
+        "- **order0_swapout_pages_est**: `swapout_total_pages - order2_16k_swapout_pages_est`; this estimate assumes only 16KB mTHP is enabled and larger mTHP sizes are disabled.",
+        "- **order2_16k_swapout_page_ratio**: estimated 16KB mTHP swapout page share among `pswpout + zswpout + swpout_zero`.",
         "",
         "Per-window deltas are available in `derived.csv` and `vmstat_derived.csv`.",
     ]
