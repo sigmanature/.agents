@@ -79,7 +79,6 @@ def ensure_awake_unlocked_and_stay_awake(
     *,
     retries: int,
     retry_sleep_s: int,
-    enable_tracing_on: bool = True,
 ) -> None:
     """Best-effort device prep for stable long-running workloads.
 
@@ -88,7 +87,7 @@ def ensure_awake_unlocked_and_stay_awake(
     - set 'stay on' while plugged in
     - increase screen timeout
     - set SELinux permissive (setenforce 0) so root sysfs writes succeed
-    - enable tracing_on if requested (no events are enabled, near-zero overhead)
+    - lock CPU frequencies to max for stable measurements
     """
 
     log_path = out_dir / "device_prepare_log.txt"
@@ -112,15 +111,12 @@ def ensure_awake_unlocked_and_stay_awake(
     
         for prep_cmd, label in (
             ("setenforce 0 2>/dev/null || true", "setenforce 0"),
-            ("echo 1 > /sys/kernel/tracing/tracing_on 2>/dev/null || true", "enable tracing_on"),
             # Lock CPU frequencies to max for stable measurements
             ("for i in 0 1 2 3 4 5 6 7; do "
              "maxf=$(cat /sys/devices/system/cpu/cpu$i/cpufreq/scaling_max_freq 2>/dev/null) && "
              "echo $maxf > /sys/devices/system/cpu/cpu$i/cpufreq/scaling_min_freq 2>/dev/null; "
              "done", "lock_cpu_freq"),
         ):
-            if label.startswith("enable tracing") and not enable_tracing_on:
-                continue
             f.write(f"\n[{label}] {datetime.now().isoformat()}\n")
             f.write(f"$ {prep_cmd}\n")
             try:

@@ -21,6 +21,8 @@ description: automate long-running sampling of android anon 16KB large folio fal
 见 [`README.md`](../README.md)。最短命令：
 
 ```bash
+python3 -m pip install -r requirements.txt
+
 python3 scripts/run_memstress_and_collect_logs.py \
   --serial <YOUR_DEVICE_SERIAL> \
   --from-manifest config/default_memstress_manifest.json
@@ -60,11 +62,20 @@ fallback_ratio = Δanon_fault_fallback / (Δanon_fault_alloc + Δanon_fault_fall
 ## Workflow Contract
 
 ### Main Workflow
-1. 准备设备：确保 adb 连接、已 root、已安装 manifest 中的部分包。
-2. 运行：用默认 manifest 执行 `run_memstress_and_collect_logs.py`。
-3. 等待运行结束（或按 Ctrl-C 停止）。
-4. 验证：检查 `derived.csv` 的 `fallback_ratio` 列和 `summary.md`。
-5. 报告：输出 `summary.md`、关键比率趋势、以及 `run_manifest.json`。
+1. 准备设备：确保 adb 连接、已 root、THP 16KB `enabled` / `stats` 路径存在，并已安装 manifest 中的目标包。
+2. 预检：先读取 `/sys/kernel/mm/transparent_hugepage/hugepages-16kB/enabled` 和对应 `stats` 目录，确认实验适用于当前内核。
+3. 运行：用默认 manifest 执行 `run_memstress_and_collect_logs.py`。
+4. 等待运行结束（或按 Ctrl-C 停止）。
+5. 验证：检查 `derived.csv` 的 `fallback_ratio` 列、`summary.md`、以及运行后 `enabled` 状态是否与预期一致。
+6. 报告：输出 `summary.md`、关键比率趋势、以及 `run_manifest.json`。
+
+### Decision Table
+| Phase | Trigger / Symptom | Action | Verify | On Failure | Workflow Effect |
+|---|---|---|---|---|---|
+| Preflight | `/sys/kernel/mm/transparent_hugepage/hugepages-16kB/enabled` or `/stats` missing | Stop and report that the kernel build does not expose the required 16KB THP interface | `cat .../enabled` and `ls .../stats` both succeed | Do not run the experiment | block |
+| Baseline run | User wants a 4 KB baseline with 16KB THP disabled | Set `hugepages-16kB/enabled` to `none` before the run and pass `--no-thp-ensure` to the main script | Post-run `cat .../enabled` still shows `[none]` | Treat the baseline as invalid and rerun | branch |
+| THP run | User wants a 16KB THP-enabled run | Set `hugepages-16kB/enabled` to `always` and allow the main script's default THP ensure behavior | Post-run `cat .../enabled` shows `[always]` | Treat the run as invalid and rerun | branch |
+| Reproducibility | Manifest packages are skipped because they are not installed | Report skipped packages and downgrade the run from exact reproduction to local smoke reproduction | `run_manifest.json` and `packages_resolved` show the actual package set | Share/install the missing APK builds before rerunning | continue |
 
 ### Output Contract
 - 运行脚本：`scripts/run_memstress_and_collect_logs.py`
